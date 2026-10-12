@@ -4,7 +4,8 @@ setup wizard on the Simple template, land on the board with the create dialog
 open, create a task from the board's New task button and see its card survive
 a reload, check the runtime reads the served effects table, reads /user/me
 once and mounts the pages after the board on the cached workspace until a
-roster write drops it, then land
+roster write drops it, turn on the AI switch and give a role AI code review,
+then land
 on GitHub's install redirect and check the page finishes it with exactly one
 callback. Every step is a real click or keystroke, so a dead button fails here.
 Usage: browser_gate.py [base_url] [stub_url]"""
@@ -166,6 +167,7 @@ def run(page, tag: str) -> list[str]:
 
     read_cache_once(page)
     ai_switch_once(page)
+    ai_responsibility_once(page)
     github_install_once(page)
     return []
 
@@ -187,6 +189,34 @@ def ai_switch_once(page) -> None:
     switch = page.get_by_role("switch", name="AI responsibilities")
     expect(switch).to_have_attribute("aria-checked", "true")
     expect(page.get_by_text(re.compile(r"^On since "))).to_be_visible()
+
+
+def ai_responsibility_once(page) -> None:
+    # The Roles tab's AI editor: a new role gets code review with its own
+    # instructions and mode, and both read back after a reload.
+    step("workspace: add a role and give it AI code review")
+    page.goto(f"{BASE}/workspace?tab=roles")
+    page.get_by_role("button", name="Add role", exact=True).first.click()
+    page.get_by_placeholder("Role name").fill("Reviewer")
+    page.get_by_role("button", name="Add role", exact=True).last.click()
+    page.get_by_role("button", name="AI code review", exact=True).click()
+    dialog = page.locator("[role=dialog][data-state=open]")
+    expect(dialog.get_by_text("Code review for Reviewer", exact=True)).to_be_visible()
+    dialog.get_by_role("button", name="Request changes", exact=True).click()
+    dialog.get_by_label("Instructions").fill("Check error handling.")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).to_be_hidden()
+
+    step("workspace: the responsibility reads back after a reload")
+    page.reload()
+    line = page.get_by_role("button", name=re.compile(r"^AI code review · .*may request changes"))
+    expect(line).to_be_visible()
+    line.click()
+    dialog = page.locator("[role=dialog][data-state=open]")
+    expect(dialog.get_by_label("Instructions")).to_have_value("Check error handling.")
+    expect(dialog.get_by_role("button", name="Request changes", exact=True)).to_have_attribute("aria-pressed", "true")
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).to_be_hidden()
 
 
 def read_cache_once(page) -> None:
