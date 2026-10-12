@@ -1,6 +1,12 @@
 """Implementations for the Workspace page."""
 
 impl WorkspacePage.loadAll -> None {
+    w: any = window;
+    await w.Promise.all([loadRoster(), loadAi()]);
+    loading = False;
+}
+
+impl WorkspacePage.loadRoster -> None {
     try {
         # One read for the roster, projects, repos, the org's managed roles
         # (the row menus and the member dialog; none means free text there)
@@ -19,7 +25,20 @@ impl WorkspacePage.loadAll -> None {
     } except Exception as e {
         toast.error("Could not load the workspace");
     }
-    loading = False;
+}
+
+impl WorkspacePage.loadAi -> None {
+    try {
+        result = root spawn ListResponsibilities();
+        settings: any = result.reports[0] if result.reports else None;
+        if settings {
+            aiEnabled = bool(settings.enabled);
+            aiSince = settings.enabled_at or "";
+        }
+    } except Exception as e {
+        toast.error("Could not load the AI settings");
+    }
+    aiLoading = False;
 }
 
 impl WorkspacePage.setField(key: str, value: str) -> None {
