@@ -102,7 +102,8 @@ import from services.agents.agents {
     DeleteResponsibility,
     ListRuns,
     RetryRun,
-    CancelRun
+    CancelRun,
+    CheckReviewService
 }
 
 def:pub app(children: any) -> JsxElement {

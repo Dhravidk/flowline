@@ -969,6 +969,13 @@ def main() -> int:
           and len(ws.get("roles", [])) == counts["ListRoles"],
           f"{ {k: len(ws.get(k, [])) for k in lists} } vs {counts}")
 
+    # The PR review service is its own app; colocated in CI, its own pod when
+    # deployed. The walker awaits a bridged function on it.
+    status, payload, reports = walker("CheckReviewService")
+    answer = reports[0] if reports else {}
+    check("CheckReviewService reaches the review service", status == 200 and answer.get("ok") is True
+          and isinstance(answer.get("ms"), int), f"{status} {payload}")
+
     parity_suite(project_id, member_id, tag)
     log_paging_suite(project_id, tag)
     log_counts_suite(project_id, tag)
