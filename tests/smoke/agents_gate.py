@@ -206,6 +206,32 @@ def runner_suite():
     check("  and the task's log counts them", any("2 comments, 1 blocking" in x for x in task_log(f)), task_log(f))
     files = [c[1] for c in wg.stub_calls(INST) if c[1].endswith("/pulls/12/files")]
     check("  reading the PR's files once", len(files) == 1, files)
+    posted = [r for r in wg.stub_state().get("reviews", []) if r["number"] == 12]
+    review = posted[0] if posted else {}
+    check("post: one review on the PR's head commit, inline comments on the added lines",
+          len(posted) == 1 and review.get("commit_id") == "sha-12" and review.get("event") == "COMMENT"
+          and sorted((c["path"], c["line"]) for c in review.get("comments", [])) == [("app/service.py", 2), ("app/service.py", 4)]
+          and "AI code review" in (review.get("body") or ""), posted)
+    check("  and the run links to it", "pullrequestreview-" in row.get("review_url", ""), row)
+
+    def with_bug(number):
+        return dict(pull(number, f"sha-{number}"), files=[
+            {"filename": "app/a.py", "status": "modified", "additions": 1, "deletions": 0,
+             "patch": "@@ -1,1 +1,2 @@\n a = 1\n+b = a / 0  # BUG"}])
+
+    stub("/_stub/pulls", {"pulls": [with_bug(13), with_bug(14)]})
+    stub("/_stub/fault", {"method": "POST", "path": f"/repos/{REPO}/pulls/13/reviews", "status": 403, "times": 5})
+    g = landed("App lacks PR write", 13)
+    lacking = settle(g)
+    check("post: a 403 fails at once with the approval hint", lacking and lacking[0].get("status") == "failed"
+          and "Pull requests: read and write" in lacking[0].get("error", ""), lacking)
+    stub("/_stub/fault", {"method": "POST", "path": f"/repos/{REPO}/pulls/14/reviews", "status": 422, "times": 1})
+    h = landed("A comment GitHub refuses", 14)
+    fallback = settle(h)
+    later = [r for r in wg.stub_state().get("reviews", []) if r["number"] == 14]
+    check("post: a refused comment line falls back to the findings in the body",
+          fallback and fallback[0].get("status") == "done" and len(later) == 1 and later[0]["comments"] == []
+          and "app/a.py:2" in (later[0].get("body") or ""), later)
 
     stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/11", "times": 1, "delay": 20})
     e = landed("Claim lapsed", 11)

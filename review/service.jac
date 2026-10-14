@@ -7,6 +7,7 @@ import os;
 import time;
 import from review.github { gh }
 import from review.engine { run_review }
+import from review.post { post_review }
 
 # What a review reports back. `retryable` tells the runner to try again later
 # rather than fail the run (a GitHub 5xx, a model timeout).
@@ -96,12 +97,32 @@ def:protect review_pr(
             if f.severity == "blocking"
         ]
     );
+    posted = post_review(
+        token,
+        repo,
+        pr_number,
+        head,
+        str(done["summary"]),
+        found,
+        done["skipped"],
+        str(done["model"]),
+        "COMMENT"
+    );
+    if not posted["ok"] {
+        return ReviewOutcome(
+            ok=False,
+            error=str(posted["error"]),
+            retryable=bool(posted["retryable"]),
+            head_sha=head
+        );
+    }
     return ReviewOutcome(
         ok=True,
         verdict="request_changes" if blocking else "comment",
         summary=str(done["summary"]),
         comments=len(found),
         blocking=blocking,
+        review_url=str(posted["url"]),
         head_sha=head,
         model=str(done["model"]),
         tokens_in=int(done["tokens_in"]),
