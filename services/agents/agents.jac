@@ -10,6 +10,7 @@ import from jaclang.lib.effects { effects }
 import from models {
     Role,
     Roles,
+    Task,
     Responsibility,
     AgentRuns,
     AgentRun,
@@ -23,11 +24,13 @@ import from models {
     ai_enabled,
     resolve,
     owned,
-    on_attached
+    on_attached,
+    settle_ai
 }
 import from constants { AI_RESPONSIBILITIES, AGENT_LIMITS }
 import from services.util { now_iso }
 import from review.service { review_ping }
+import from services.agents.runs { note_queued }
 import from jaclang.server.bridge { BridgeError }
 
 glob MODEL_NAME_MAX: int = 100,
@@ -274,6 +277,15 @@ walker find_run {
     }
 }
 
+# Settle the run's task after a retry or a cancel moved the run.
+def settle_run_task(holder: Root, run: AgentRun, stamp: str) {
+    t = resolve(run.task_id);
+    if isinstance(t, Task) and owned(holder, t) {
+        settle_ai(holder, t, {jid(run): run.status}, stamp);
+    }
+}
+
+
 walker:protect RetryRun(find_run) {
     """Queue a run that failed, was skipped or was cancelled again. Refused
     while the workspace's AI is off."""
@@ -289,11 +301,17 @@ walker:protect RetryRun(find_run) {
             report refusal("ai_off", "AI is turned off for this workspace.");
             disengage;
         }
+        stamp = now_iso();
         here.status = "queued";
         here.error = "";
-        here.queued_at = now_iso();
+        here.queued_at = stamp;
+        here.next_try_at = stamp;
+        here.lease_until = "";
+        here.attempts = 0;
         here.started_at = "";
         here.finished_at = "";
+        settle_run_task(root, here, stamp);
+        note_queued(jid(root), stamp);
         report {"ok": True, "run": agent_run_view(here)};
         disengage;
     }
@@ -308,9 +326,12 @@ walker:protect CancelRun(find_run) {
             );
             disengage;
         }
+        stamp = now_iso();
         here.status = "cancelled";
         here.error = "Cancelled.";
-        here.finished_at = now_iso();
+        here.lease_until = "";
+        here.finished_at = stamp;
+        settle_run_task(root, here, stamp);
         report {"ok": True, "run": agent_run_view(here)};
         disengage;
     }

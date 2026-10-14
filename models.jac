@@ -228,6 +228,11 @@ node Task {
         checklist: list[dict[str, any]] = [],
         # When work on the task starts; the roadmap draws it to the due date.
         start_date: str = "",
+        # "queued" or "running" while an AI run is open on the task, else "".
+        # Kept by the run's write points through settle_ai, so a row shows it.
+        ai_state: str = "",
+        # The stamp of the request that last queued a run here (settle_ai).
+        ai_queued_at: str = "",
         # The container project's jid and the assignees' jids, kept in step
         # with the edges at every write point so a list row needs no hop.
         # The edges stay the truth: `owned` climbs the container edge.
@@ -343,7 +348,8 @@ node Task {
             start_date=self.start_date,
             note_lead=note_lead(self.notes),
             checklist_done=counts[0],
-            checklist_total=counts[1]
+            checklist_total=counts[1],
+            ai_state=self.ai_state
         );
     }
 
@@ -651,7 +657,9 @@ obj TaskRow {
         note_lead: str = "",
         # How many checklist items are ticked, and how many there are.
         checklist_done: int = 0,
-        checklist_total: int = 0;
+        checklist_total: int = 0,
+        # "queued" or "running" while an AI run is open on the task.
+        ai_state: str = "";
 }
 
 obj TaskView(TaskRow) {
@@ -924,7 +932,9 @@ obj StepView {
         task_count: int = 0,
         # The first two titles in the step panel's order, filled with the
         # count, so a close zoom on the flow line needs no request.
-        task_titles: list[str] = [];
+        task_titles: list[str] = [],
+        # The AI responsibilities that run when a task lands here, by name.
+        ai: list[str] = [];
 }
 
 # What the client is allowed to know about the GitHub link. The connection
@@ -1126,6 +1136,26 @@ def active_run(holder: Root, tid: str, rid: str) -> list[AgentRun] {
         }
     }
     return out;
+}
+
+
+# Recompute a task's ai_state from its runs. `now` maps a run jid to the
+# status this request (`stamp`) gave it, and a run queued in this request
+# counts through ai_queued_at: a pushed query sees neither write yet.
+def settle_ai(holder: Root, t: Task, now: dict[str, str], stamp: str) {
+    seen: list[str] = [];
+    for r in runs_of_task(holder, jid(t)) {
+        if jid(r) not in now {
+            seen.append(r.status);
+        }
+    }
+    seen.extend(list(now.values()));
+    if t.ai_queued_at == stamp {
+        seen.append("queued");
+    }
+    t.ai_state = "running"
+        if "running" in seen
+        else ("queued" if "queued" in seen else "");
 }
 
 

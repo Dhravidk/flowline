@@ -79,6 +79,7 @@ def:pub StepNode(
                     key="meta"
                     blurb={step.blurb}
                     owner={step.owner if showOwner else ""}
+                    ai={step.ai}
                 />
             }}
             {if showTitles {

@@ -25,7 +25,8 @@ import from models {
     resolve,
     owned,
     agent_run_key,
-    runs_of_task
+    runs_of_task,
+    settle_ai
 }
 import from constants { AGENT_LIMITS }
 import from services.github.util { installation_token, lease_owner }
@@ -161,6 +162,24 @@ def finish(holder: Root, run: AgentRun, status: str, why: str, stamp: str) {
 }
 
 
+# Settle ai_state on each task whose runs this request moved.
+def settle_tasks(holder: Root, moved: list[AgentRun], stamp: str) {
+    by_task: dict[str, dict[str, str]] = {};
+    for run in moved {
+        if run.task_id not in by_task {
+            by_task[run.task_id] = {};
+        }
+        by_task[run.task_id][jid(run)] = run.status;
+    }
+    for tid in by_task {
+        t = resolve(tid);
+        if isinstance(t, Task) and owned(holder, t) {
+            settle_ai(holder, t, by_task[tid], stamp);
+        }
+    }
+}
+
+
 # Whether the workspace has a run queued or running. Read before any write of
 # this request: a pushed query does not see this request's own writes.
 def has_open(holder: Root) -> bool {
@@ -181,6 +200,7 @@ def claim(holder: Root) -> dict[str, any] {
     now = stamp_after(0);
     left = has_open(holder);
     jobs: list[dict[str, any]] = [];
+    moved: list[AgentRun] = [];
     token = "";
     conns = [holder-->[?:GithubConnection]];
     c = conns[0] if conns else None;
@@ -193,6 +213,7 @@ def claim(holder: Root) -> dict[str, any] {
         if len(jobs) >= RUNS_PER_TICK {
             break;
         }
+        moved.append(run);
         t = resolve(run.task_id);
         r = resolve(run.responsibility_id);
         if not isinstance(t, Task) or not owned(holder, t) {
@@ -233,6 +254,7 @@ def claim(holder: Root) -> dict[str, any] {
             }
         );
     }
+    settle_tasks(holder, moved, now);
     return {"jobs": jobs, "left": left};
 }
 
@@ -317,6 +339,7 @@ def send_back(holder: Root, run: AgentRun, t: Task, stamp: str) {
 # Write each answer onto its run, if the run is still on that attempt.
 def apply(holder: Root, results: list[dict[str, any]]) {
     now = stamp_after(0);
+    moved: list[AgentRun] = [];
     for res in results {
         job = res["job"];
         run = resolve(job["run_id"]);
@@ -326,6 +349,7 @@ def apply(holder: Root, results: list[dict[str, any]]) {
             or run.attempts != job["attempt"] {
             continue;
         }
+        moved.append(run);
         out: any = res.get("out");
         ok = out is not None and bool(out.ok);
         error = str(out.error) if out is not None else str(res.get("error") or "");
@@ -413,6 +437,7 @@ def apply(holder: Root, results: list[dict[str, any]]) {
                 + str(round(run.cost_usd, 6))
         );
     }
+    settle_tasks(holder, moved, now);
 }
 
 
