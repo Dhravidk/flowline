@@ -104,7 +104,10 @@ people it tracks are roster members.
   `roadmap` (`RoadmapSnapshot`, one project's dated tasks), `agents` (a
   role's AI responsibilities, the workspace's AI switch on the `AgentRuns`
   box, off by default, and a task's runs; `ListResponsibilities` is a
-  declared reader, `ListRuns` never cached), `filters` (the
+  declared reader, `ListRuns` never cached; `runs.jac` queues a role's
+  responsibilities from `landing_tail`, so every kind of move queues, and
+  notes the workspace in the `ai_queue` docs-store index the runner reads),
+  `filters` (the
   saved-filter writers),
   `workspace` (`GetWorkspace`: the roster, projects, flow line, repos,
   roles, saved filter sets, flow line meta and GitHub
