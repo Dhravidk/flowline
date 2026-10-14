@@ -169,6 +169,7 @@ def run(page, tag: str) -> list[str]:
     ai_switch_once(page)
     ai_responsibility_once(page)
     github_install_once(page)
+    ai_run_once(page)
     return []
 
 
@@ -369,6 +370,64 @@ def github_install_once(page) -> None:
     settle(page, "/board", "Board")
     page.wait_for_timeout(3000)
     assert not syncs, f"the board open called {syncs}"
+
+
+def api(page, name: str, body: dict):
+    """A walker call as the signed-in browser makes it; the first report."""
+    return page.evaluate(
+        """async ([base, name, body]) => {
+            const r = await fetch(base + "/walker/" + name, {
+                method: "POST",
+                headers: {"Content-Type": "application/json",
+                          "Authorization": "Bearer " + localStorage.getItem("jac_token")},
+                body: JSON.stringify(body),
+            });
+            const d = await r.json();
+            const reports = (d.data && d.data.reports) || d.reports || [];
+            return reports[0];
+        }""",
+        [BASE, name, body],
+    )
+
+
+def ai_run_once(page) -> None:
+    # The task sheet's AI reviews: Reviewer (given code review above) owns
+    # Review, a task with a linked PR lands there, and the sheet follows the
+    # run from the queue to the review on its own (the runner's fake model).
+    step("ai: Review is the Reviewer's, and a task with a PR lands there")
+    repo = "stub-org/ai-repo"
+    body = json.dumps({"pulls": [{"repo": repo, "number": 5, "head_sha": "sha-5"}]}).encode()
+    req = urllib.request.Request(f"{STUB}/_stub/pulls", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        assert resp.status == 200, f"stub pulls {resp.status}"
+    steps = {st["name"]: st for st in api(page, "GetFlowLine", {"with_counts": False})}
+    api(page, "SaveStep", {"step_id": steps["Review"]["id"], "owner": "Reviewer"})
+    first = (api(page, "ListProjects", {}) or [{}])[0]
+    project_id = first.get("id") or first.get("_jac_id", "")
+    made = api(page, "CreateTask", {"title": "Reviewed by AI", "project_id": project_id,
+                                    "step_id": steps["Doing"]["id"]})
+    fields = {k: made.get(k, "") for k in ("title", "category", "priority", "status", "step_id", "due_date",
+                                           "start_date", "notes", "issue_link", "reviewer_id", "review_due",
+                                           "project_id")}
+    fields.update({"task_id": made["id"], "tags": [], "estimate": 0.0, "assignee_ids": [],
+                   "pr_link": f"https://github.com/{repo}/pull/5"})
+    api(page, "UpdateTask", fields)
+    landed = api(page, "MoveTask", {"task_id": made["id"], "step_id": steps["Review"]["id"]})
+    assert landed.get("ai_state") == "queued", f"the move reported {landed.get('ai_state')!r}, expected 'queued'"
+
+    step("ai: the flow line marks Review, the sheet shows the run reviewed")
+    page.goto(f"{BASE}/flowlines")
+    settle(page, "/flowlines", "Flow line")
+    expect(page.locator(f"[data-step='{steps['Review']['id']}'] [data-step-ai]")).to_be_visible()
+    page.goto(f"{BASE}/board?task={made['id']}")
+    settle(page, "/board", "Board")
+    runs = page.get_by_role("region", name="AI reviews")
+    expect(runs).to_be_visible()
+    expect(runs.get_by_text("Reviewed", exact=True)).to_be_visible(timeout=90_000)
+    expect(runs.get_by_role("link", name="View on GitHub")).to_be_visible()
+    # The settled run refetches the task, so the row's chip goes with it.
+    expect(page.get_by_text(re.compile(r"^AI review(ing| queued)$"))).to_have_count(0, timeout=15_000)
 
 
 def main() -> int:

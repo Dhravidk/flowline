@@ -115,7 +115,10 @@ people it tracks are roster members.
   installation token rides in the call because the review service may not
   read the graph; `FLOWLINE_FAKE_LLM`, `FLOWLINE_AI_INTERVAL_SECONDS`,
   `_BACKOFF_SECONDS` and `_LEASE_SECONDS` are the gates' knobs;
-  `FLOWLINE_AGENTS_PAUSED=1` stops it claiming; `metrics.jac` counts runs
+  `FLOWLINE_AGENTS_PAUSED=1` stops it claiming; `Task.ai_state`
+  (queued or running, the row's AI chip) is kept by `settle_ai` at every
+  write point that moves a run (queue, claim, apply, `RetryRun`,
+  `CancelRun`), so a new one must call it too; `metrics.jac` counts runs
   with plain `prometheus_client` counters, which `/metrics` serves only when
   it merges several workers' files, the deployed case),
   `filters` (the

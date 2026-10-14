@@ -172,6 +172,15 @@ def:pub StepInspector(
                 <p className="text-xs text-subtle">
                     A role, not a person. Roles live in Workspace.
                 </p>
+                {if len(step.ai) > 0 {
+                    <p
+                        key="ai"
+                        className="text-xs text-muted-foreground"
+                        data-step-ai=""
+                    >
+                        {"When a task lands here, AI runs: " + ", ".join(step.ai) + "."}
+                    </p>
+                }}
             </div>
             <div className="flex flex-col gap-1.5">
                 <span className="text-[12.5px] font-semibold" id="kind-label">

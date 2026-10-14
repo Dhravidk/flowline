@@ -15,7 +15,8 @@ import from models {
     agent_runs_box,
     agent_run_key,
     ai_enabled,
-    on_attached
+    on_attached,
+    settle_ai
 }
 import from constants { AI_RESPONSIBILITIES, AGENT_LIMITS }
 
@@ -107,6 +108,7 @@ def queue_responsibilities(
     box = agent_runs_box(holder);
     day = stamp[:10];
     queued: list[str] = [];
+    fresh: dict[str, str] = {};
     skipped = "";
     for r in wanted {
         busy = [a.status for a in active_run(holder, jid(t), jid(r))];
@@ -132,10 +134,13 @@ def queue_responsibilities(
             next_try_at=stamp
         );
         on_attached(holder, run);
+        fresh[jid(run)] = "queued";
         box.day_counts = {day: used + 1};
         queued.append(catalogue_name(r.key).lower());
     }
     if queued {
+        t.ai_queued_at = stamp;
+        settle_ai(holder, t, fresh, stamp);
         note_queued(jid(holder), stamp);
         return " · Queued AI " + ", ".join(queued) + skipped;
     }

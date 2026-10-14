@@ -35,6 +35,15 @@ def runs(task_id):
     return rep[0] if rep and isinstance(rep[0], list) else []
 
 
+def flow_steps():
+    rep = reports("GetFlowLine", {"with_counts": False})
+    return {st["name"]: st for st in (rep[0] if rep and isinstance(rep[0], list) else [])}
+
+
+def ai_state(task_id):
+    return walker("GetTask", {"task_id": task_id}).get("ai_state")
+
+
 def task_log(task_id):
     pg = walker("ListLogEntries", {"from_date": "2020-01-01", "to_date": "2030-12-31",
                                    "task_id": task_id, "page_size": 100})
@@ -74,6 +83,8 @@ def queue_suite():
     tid = t.get("id", "")
     check("a task on Building with a linked PR", t.get("pr_link", "").endswith("/pull/7"), t)
 
+    steps = flow_steps()
+    check("with AI off, no step carries an AI mark", all(st.get("ai") == [] for st in steps.values()), steps)
     move(tid, rid)
     check("with AI off, a move queues nothing", runs(tid) == [], runs(tid))
     check("  and the move's log line says AI is off",
@@ -81,7 +92,11 @@ def queue_suite():
 
     move(tid, bid)
     walker("SetAiEnabled", {"enabled": True})
-    move(tid, rid)
+    steps = flow_steps()
+    check("with AI on, In review carries Code review and Building nothing",
+          steps.get("In review", {}).get("ai") == ["Code review"] and steps.get("Building", {}).get("ai") == [], steps)
+    landed_view = move(tid, rid)
+    check("  and the move's reported row says AI review queued", landed_view.get("ai_state") == "queued", landed_view)
     queued = runs(tid)
     first = queued[0] if queued else {}
     check("with AI on, the move queues one run", len(queued) == 1 and first.get("status") == "queued"
@@ -169,6 +184,7 @@ def runner_suite():
           and first.get("head_sha") == "sha-7a" and first.get("model") == "fake", done)
     check("  and the task's log says so", any("AI code review · 0 comments, 0 blocking" in x for x in task_log(a)),
           task_log(a))
+    check("  and the row's AI chip clears", ai_state(a) == "", ai_state(a))
     calls = [c[1] for c in wg.stub_calls(INST)]
     check("  reading the PR with the installation's token", f"/repos/{REPO}/pulls/7" in calls, calls)
     move(a, bid)
@@ -189,6 +205,19 @@ def runner_suite():
     check("runner: a 403 fails at once", refused and refused[0].get("status") == "failed"
           and refused[0].get("attempts") == 1 and "403" in refused[0].get("error", ""), refused)
     check("  and the task's log says why", any("AI code review failed" in x for x in task_log(c)), task_log(c))
+
+    stub("/_stub/pulls", {"pulls": [pull(18, "sha-18")]})
+    stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/18", "times": 1, "delay": 8})
+    x = landed("Cancelled, then retried", 18)
+    open_run = (runs(x) or [{}])[0]
+    cancelled = walker("CancelRun", {"run_id": open_run.get("id", "")})
+    check("cancel: an open run is cancelled and the chip clears", cancelled.get("ok") is True
+          and ai_state(x) == "", (cancelled, ai_state(x)))
+    again_view = walker("RetryRun", {"run_id": open_run.get("id", "")})
+    check("retry: the run is queued again with a fresh count", again_view.get("ok") is True
+          and (again_view.get("run") or {}).get("attempts") == 0 and ai_state(x) == "queued", again_view)
+    redone = settle(x, 1, 120)
+    check("  and the runner finishes it", redone and redone[0].get("status") == "done" and ai_state(x) == "", redone)
 
     d = landed("Closed PR", 10)
     closed = settle(d)

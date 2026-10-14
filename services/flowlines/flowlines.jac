@@ -26,8 +26,11 @@ import from models {
     mismatched_on_step,
     steps_of,
     roles_box,
-    steps_box
+    steps_box,
+    responsibilities_on_step,
+    ai_enabled
 }
+import from services.agents.runs { catalogue_name }
 import from services.util {
     now_iso,
     page_bounds,
@@ -182,8 +185,15 @@ def read_flow_line(
     ensure_arrows(holder);
     views: list[StepView] = [];
     line_steps = [box-->[?:WorkflowStep]];
+    ai_on = ai_enabled(holder);
     for st in line_steps {
-        views.append(step_view(st, line_steps));
+        view = step_view(st, line_steps);
+        if ai_on {
+            view.ai = [
+                catalogue_name(r.key) for r in responsibilities_on_step(holder, st)
+            ];
+        }
+        views.append(view);
     }
     views.sort(key=lambda (s: StepView) { s.sort_order; });
     if not with_counts {

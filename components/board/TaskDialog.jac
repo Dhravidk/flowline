@@ -20,6 +20,7 @@ import from ..common.Avatar { AvatarStack }
 import from .Checklist { ChecklistEditor }
 import from .MoveMenu { MoveMenu, routeFrom }
 import from .TravelLog { TravelLog }
+import from .AgentRuns { AgentRuns }
 import from ..common.DatePicker { DatePicker }
 import from ..ui.button { Button }
 import from ..ui.sheet { Sheet, SheetContent, SheetTitle, SheetDescription }
@@ -271,6 +272,19 @@ def:pub TaskDialog(
         checklist = view.checklist;
         if onChecklist {
             onChecklist(view);
+        }
+    }
+
+    # An AI run settled: fetch the task again so the page's row drops its chip.
+    # Only the row goes up; the form keeps whatever is being edited.
+    async def refreshRow(tid: str) {
+        try {
+            result = root spawn GetTask(task_id=tid);
+            if result.reports and onChecklist {
+                onChecklist(result.reports[0]);
+            }
+        } except Exception as e {
+            return;
         }
     }
 
@@ -1310,6 +1324,14 @@ def:pub TaskDialog(
                                 taskId={taskId}
                                 items={checklist}
                                 onChange={absorbChecklist}
+                            />
+                        }}
+                        {if editing and taskId {
+                            <AgentRuns
+                                key={"runs-" + taskId}
+                                taskId={taskId}
+                                refreshKey={historyKey}
+                                onSettled={lambda { refreshRow(taskId); }}
                             />
                         }}
                         {if editing and taskId {
