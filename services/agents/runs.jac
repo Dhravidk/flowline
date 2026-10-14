@@ -85,9 +85,12 @@ def note_queued(root_jid: str, stamp: str) {
 
 
 # Queue every enabled responsibility of the role that owns `step` for `t`.
-# Returns the move's log-line tail: what was queued, or why nothing was.
+# Returns the move's log-line tail: what was queued, or why nothing was. A
+# queued run reads the newest commit when it runs, so it is never doubled; a
+# `fresh_commit` (new commits on the PR) queues behind a running one, which
+# is reviewing the commit before.
 def queue_responsibilities(
-    holder: Root, t: Task, step: WorkflowStep, stamp: str
+    holder: Root, t: Task, step: WorkflowStep, stamp: str, fresh_commit: bool = False
 ) -> str {
     wanted = responsibilities_on_step(holder, step);
     if not wanted {
@@ -106,7 +109,8 @@ def queue_responsibilities(
     queued: list[str] = [];
     skipped = "";
     for r in wanted {
-        if active_run(holder, jid(t), jid(r)) {
+        busy = [a.status for a in active_run(holder, jid(t), jid(r))];
+        if "queued" in busy or (busy and not fresh_commit) {
             continue;
         }
         used = int(box.day_counts.get(day, 0));

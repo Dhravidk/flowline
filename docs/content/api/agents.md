@@ -28,6 +28,13 @@ the workspace's AI switch and a task's runs. Source:
     `REQUEST_CHANGES` and sends the task back along its step's "changes
     requested" arrow, if the task is still on the step the run was queued for.
 
+    New commits on the linked pull request (a `synchronize` delivery) queue
+    the task's responsibilities again while it stays on the step. A queued run
+    reads the newest commit when it runs; one already running on the commit
+    before gets a new run queued behind it; a commit already reviewed is
+    skipped. The PR must be linked to the task the way the GitHub sync links
+    one (the PR's body closes the task's issue).
+
 Every refusal is `{"ok": false, "error": <code>, "message": <text>}`.
 
 ## Settings

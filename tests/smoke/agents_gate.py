@@ -138,7 +138,10 @@ def pull(number, head, state="open"):
 
 
 def runner_suite():
-    stub("/_stub/reset", {"installations": [INST], "repos": {REPO: []}})
+    stub("/_stub/reset", {"installations": [INST], "repos": {REPO: [{
+        "number": 30, "title": "Imported issue", "state": "open", "body": "", "labels": [], "assignees": [],
+        "html_url": f"https://github.com/{REPO}/issues/30", "repository_url": f"https://api.github.com/repos/{REPO}",
+        "created_at": "2026-09-01T00:00:00Z", "updated_at": "2026-09-02T00:00:00Z", "closed_at": None}]}})
     stub("/_stub/pulls", {"pulls": [pull(7, "sha-7a"), pull(8, "sha-8"), pull(9, "sha-9"),
                                     pull(10, "sha-10", "closed"), pull(11, "sha-11")]})
     wg.login("runner")
@@ -262,6 +265,40 @@ def runner_suite():
     settle(n)
     check("request changes: a task that moved on meanwhile stays put", walker("GetTask", {"task_id": n}).get("step_id") == ready,
           walker("GetTask", {"task_id": n}).get("step_id"))
+
+    # New commits on a reviewed PR while its task waits in review queue it
+    # again; a second delivery for the same commit is skipped. The PR links
+    # to an imported issue the way the sync links one ("Closes #30").
+    def pr_event(action, number, head, body=""):
+        stub("/_stub/pulls", {"pulls": [pull(number, head)]})
+        wg.push("pull_request", {
+            "action": action, "installation": {"id": INST}, "repository": {"full_name": REPO},
+            "sender": {"login": "octocat", "type": "User"},
+            "pull_request": {"number": number, "state": "open", "body": body, "labels": [], "head": {"sha": head},
+                             "html_url": f"https://github.com/{REPO}/pull/{number}", "updated_at": wg.iso(),
+                             "merged_at": None}})
+
+    repo_id = walker("AddRepo", {"full_name": REPO, "project_id": pid}).get("id", "")
+    walker("SetRepoAutoSync", {"repo_id": repo_id, "enabled": True})
+    walker("SyncGithub", {})
+    issue_task = next((r for r in wg.tasks_all() if r.get("gh_repo") == REPO and r.get("gh_issue_number") == 30), {})
+    pr_event("opened", 31, "sha-31a", "Closes #30")
+    linked = walker("GetTask", {"task_id": issue_task.get("id", "")})
+    check("re-review: an imported issue's task links its PR", linked.get("pr_number") == 31, linked)
+    move(linked["id"], rid)
+    settle(linked["id"])
+    before = len(runs(linked["id"]))
+    time.sleep(1)
+    pr_event("synchronize", 31, "sha-31b")
+    fresh = settle(linked["id"], before + 1)
+    check("re-review: new commits on the PR are reviewed again", len(fresh) == before + 1
+          and fresh[0].get("status") == "done" and fresh[0].get("head_sha") == "sha-31b", fresh[:2])
+    check("  and the log says why", any("New commits on PR" in x for x in task_log(linked["id"])), task_log(linked["id"]))
+    time.sleep(1)
+    pr_event("synchronize", 31, "sha-31b")
+    repeat = settle(linked["id"], before + 2)
+    check("re-review: the same commit again is skipped", len(repeat) == before + 2
+          and repeat[0].get("status") == "skipped" and "already reviewed" in repeat[0].get("error", ""), repeat[:2])
 
     stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/11", "times": 1, "delay": 20})
     e = landed("Claim lapsed", 11)
