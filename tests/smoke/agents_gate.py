@@ -233,6 +233,36 @@ def runner_suite():
           fallback and fallback[0].get("status") == "done" and len(later) == 1 and later[0]["comments"] == []
           and "app/a.py:2" in (later[0].get("body") or ""), later)
 
+    # Request-changes mode: a blocking finding posts REQUEST_CHANGES and sends
+    # the task back along In review's "changes requested" arrow.
+    walker("LinkTransition", {"from_id": rid, "to_id": bid, "trigger": "changes_requested"})
+    resp = (walker("ListResponsibilities").get("responsibilities") or [{}])[0]
+    walker("SaveResponsibility", {"responsibility_id": resp.get("id", ""), "on_steps": [rid],
+                                  "instructions": "Check errors.", "mode": "request_changes"})
+    todo_only = "@@ -1,1 +1,2 @@\n a = 1\n+b = 2  # TODO tidy"
+    stub("/_stub/pulls", {"pulls": [with_bug(15), with_bug(17), dict(pull(16, "sha-16"), files=[
+        {"filename": "app/b.py", "status": "modified", "additions": 1, "deletions": 0, "patch": todo_only}])]})
+    k = landed("Blocking finding", 15)
+    sent = settle(k)
+    back = walker("GetTask", {"task_id": k})
+    posted15 = [r for r in wg.stub_state().get("reviews", []) if r["number"] == 15]
+    check("request changes: a blocking finding posts REQUEST_CHANGES", sent and sent[0].get("verdict") == "request_changes"
+          and posted15 and posted15[0]["event"] == "REQUEST_CHANGES", posted15)
+    check("  and sends the task back along the arrow", back.get("step_id") == bid
+          and any("Moved to Building · AI code review requested changes" in x for x in task_log(k)), task_log(k))
+    m = landed("Warnings only", 16)
+    settle(m)
+    posted16 = [r for r in wg.stub_state().get("reviews", []) if r["number"] == 16]
+    check("request changes: warnings alone comment and leave the task", walker("GetTask", {"task_id": m}).get("step_id") == rid
+          and posted16 and posted16[0]["event"] == "COMMENT", posted16)
+    ready = walker("SaveStep", {"name": "Ready", "kind": "start", "owner": "Developer"}).get("id", "")
+    stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/17", "times": 1, "delay": 5})
+    n = landed("Moved on meanwhile", 17)
+    move(n, ready)
+    settle(n)
+    check("request changes: a task that moved on meanwhile stays put", walker("GetTask", {"task_id": n}).get("step_id") == ready,
+          walker("GetTask", {"task_id": n}).get("step_id"))
+
     stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/11", "times": 1, "delay": 20})
     e = landed("Claim lapsed", 11)
     lapsed = settle(e, 1, 150)

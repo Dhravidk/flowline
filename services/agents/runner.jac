@@ -16,6 +16,7 @@ import from jaclang.server.shared_store { shared_store }
 import from jaclang.server.bridge { BridgeError }
 import from models {
     Task,
+    WorkflowStep,
     Responsibility,
     AgentRun,
     AgentRuns,
@@ -29,6 +30,7 @@ import from models {
 import from constants { AGENT_LIMITS }
 import from services.github.util { installation_token, lease_owner }
 import from services.log.log { record_task_event }
+import from services.tasks.tasks { follow_trigger }
 import from services.agents.runs { AI_QUEUE, catalogue_name }
 import from review.service { review_pr }
 
@@ -274,6 +276,43 @@ async def ask_all(jobs: list[dict[str, any]]) -> list[dict[str, any]] {
 }
 
 
+# Request-changes mode: a review with a blocking finding sends the task back
+# along its step's "changes requested" arrow, as a person's review would, but
+# only while the task is still on the step the run was queued for.
+def send_back(holder: Root, run: AgentRun, t: Task, stamp: str) {
+    r = resolve(run.responsibility_id);
+    if run.verdict != "request_changes"
+        or not isinstance(r, Responsibility)
+        or r.mode != "request_changes"
+        or not run.step_id
+        or t.step_id != run.step_id {
+        return;
+    }
+    t.pr_review_state = "changes_requested";
+    t.pr_review_at = stamp;
+    why = "AI " + catalogue_name(run.key).lower() + " requested changes";
+    if not follow_trigger(holder, t, "changes_requested", [], why, stamp, {}) {
+        step = resolve(t.step_id);
+        if isinstance(step, WorkflowStep)
+            and not [
+                a
+                for a in step.transitions
+                if a.get("trigger", "") == "changes_requested"
+            ] {
+            record_task_event(
+                holder,
+                t,
+                why
+                    + " · no arrow out of "
+                    + step.name
+                    + " sends work back on changes requested",
+                stamp
+            );
+        }
+    }
+}
+
+
 # Write each answer onto its run, if the run is still on that attempt.
 def apply(holder: Root, results: list[dict[str, any]]) {
     now = stamp_after(0);
@@ -330,6 +369,7 @@ def apply(holder: Root, results: list[dict[str, any]]) {
                         + " blocking",
                     now
                 );
+                send_back(holder, run, t, now);
             }
             outcome = "done";
         } elif retryable and run.attempts < AGENT_LIMITS["max_attempts"] {

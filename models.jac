@@ -475,6 +475,9 @@ node AgentRun {
         responsibility_id: str,
         key: str,
         run_key: str,
+        # The step the task landed on when the run was queued: a review that
+        # requests changes sends the task back only if it is still there.
+        step_id: str = "",
         # An AGENT_RUN_STATUSES value.
         status: str = "queued",
         pr_repo: str = "",

@@ -106,7 +106,7 @@ def:protect review_pr(
         found,
         done["skipped"],
         str(done["model"]),
-        "COMMENT"
+        "REQUEST_CHANGES" if mode == "request_changes" and blocking else "COMMENT"
     );
     if not posted["ok"] {
         return ReviewOutcome(

@@ -118,6 +118,7 @@ def queue_responsibilities(
             task_id=jid(t),
             responsibility_id=jid(r),
             key=r.key,
+            step_id=jid(step),
             run_key=agent_run_key(jid(t), jid(r), "queued:" + stamp),
             status="queued",
             pr_repo=str(pr[0]),
