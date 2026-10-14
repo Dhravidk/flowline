@@ -1,8 +1,5 @@
-"""Rename the organization. The name lives in the account profile (the account
-IS the organization), so this talks to /user/me through lib/session rather than
-a walker. Save appears only once the name differs; the header hears about it
-through a `flowline:org-renamed` event, so nothing has to reload.
-"""
+"""The organization's name (the account profile, through lib/session; the
+header hears a rename as `flowline:org-renamed`) and the AI switch."""
 
 import from ...lib.session { fetchProfile, patchProfile, cachedOrgName }
 import from ..ui.button { Button }
@@ -11,10 +8,17 @@ import from ..ui.skeleton { Skeleton }
 import from ..common.glyphs { Spinner }
 import from .SectionHeader { SectionHeader }
 import from .SettingRow { SettingRow }
+import from .AiSwitch { AiSwitch }
 import from "sonner" { toast }
 
 
-def:pub OrganizationSection(onRenamed: Callable[[str], None] = None) -> JsxElement {
+def:pub OrganizationSection(
+    aiEnabled: bool,
+    aiSince: str,
+    aiLoading: bool,
+    onAiChanged: Callable[[], None],
+    onRenamed: Callable[[str], None] = None
+) -> JsxElement {
     # The header's cached name fills the field at once; the profile read
     # then confirms it (and only replaces an untouched draft).
     has draft: str = cachedOrgName(),
@@ -86,5 +90,11 @@ def:pub OrganizationSection(onRenamed: Callable[[str], None] = None) -> JsxEleme
                     } }
                 </SettingRow>
             </div>
+            <AiSwitch
+                enabled={aiEnabled}
+                enabledAt={aiSince}
+                loading={aiLoading}
+                onChanged={onAiChanged}
+            />
         </div>;
 }

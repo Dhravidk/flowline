@@ -165,8 +165,28 @@ def run(page, tag: str) -> list[str]:
     expect(page.get_by_role("heading", name="Overview", exact=True)).to_be_visible()
 
     read_cache_once(page)
+    ai_switch_once(page)
     github_install_once(page)
     return []
+
+
+def ai_switch_once(page) -> None:
+    # The Organization section's AI switch: off in a new workspace, with the
+    # notice of what turning it on sends, and an "on" that survives a reload.
+    step("workspace: the AI switch starts off beside what it sends")
+    page.goto(f"{BASE}/workspace?tab=organization")
+    switch = page.get_by_role("switch", name="AI responsibilities")
+    expect(switch).to_have_attribute("aria-checked", "false")
+    expect(page.get_by_text("The linked issue's title and description.", exact=True)).to_be_visible()
+
+    step("workspace: turning AI on is kept across a reload")
+    switch.click()
+    expect(page.get_by_text("AI responsibilities turned on", exact=True)).to_be_visible()
+    expect(switch).to_have_attribute("aria-checked", "true")
+    page.reload()
+    switch = page.get_by_role("switch", name="AI responsibilities")
+    expect(switch).to_have_attribute("aria-checked", "true")
+    expect(page.get_by_text(re.compile(r"^On since "))).to_be_visible()
 
 
 def read_cache_once(page) -> None:

@@ -538,6 +538,9 @@ File-based routing with route groups:
 - **`/workspace` is every setting**: Organization, People, Projects, Roles,
   GitHub and Preferences (the theme) as `?tab=` sections from
   `components/workspace/`.
+  Organization also holds the AI switch (`AiSwitch`, `SetAiEnabled`) and the
+  notice of what turning it on sends; the page reads it with
+  `ListResponsibilities` beside the workspace (only this page shows it).
   The page loads one `GetWorkspace` and hands the Projects and Roles
   sections their lists as props (open counts are the projects' own
   tallies), so a tab switch is a render, not a request; a section's write

@@ -15,6 +15,7 @@ import from ...services.roster.roster {
     ArchiveMember
 }
 import from ...services.projects.projects { AssignToProject, UnassignFromProject }
+import from ...services.agents.agents { ListResponsibilities }
 import from ...lib.workspace { loadWorkspace, forgetWorkspace }
 import from ...components.roster.MemberTable { MemberTable }
 import from ...components.roster.MemberDialog { MemberDialog }
@@ -82,6 +83,11 @@ def:pub WorkspacePage -> JsxPage {
         # The header's cache, so the rail shows the name from the first paint.
         orgName: str = cachedOrgName(),
         loading: bool = True,
+        # The AI switch and every role's responsibilities, read beside the
+        # workspace; only this page shows them.
+        aiEnabled: bool = False,
+        aiSince: str = "",
+        aiLoading: bool = True,
         # Read during the first render, so the deep-linked section paints
         # straight away instead of flipping after an effect.
         tab: str = initialTab(),
@@ -117,6 +123,8 @@ def:pub WorkspacePage -> JsxPage {
     );
 
     async def loadAll -> None;
+    async def loadRoster -> None;
+    async def loadAi -> None;
     async def saveMember -> None;
     async def archiveMember -> None;
     async def applyRoles(memberId: str, next: list[str], undoable: bool) -> None;
@@ -232,6 +240,10 @@ def:pub WorkspacePage -> JsxPage {
                         {if tab == "organization" {
                             <OrganizationSection
                                 key="organization"
+                                aiEnabled={aiEnabled}
+                                aiSince={aiSince}
+                                aiLoading={aiLoading}
+                                onAiChanged={loadAi}
                                 onRenamed={lambda (name: str) { orgName = name; }}
                             />
                         } elif tab == "people" {
