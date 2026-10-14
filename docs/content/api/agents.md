@@ -6,11 +6,14 @@ the workspace's AI switch and a task's runs. Source:
 `services/agents/agents.jac`.
 { .fl-lede }
 
-!!! info "Nothing runs yet"
+!!! info "How a run starts"
 
-    Runs are queued by the job queue, which is still being built. Until then
-    no walker creates a run, and `RetryRun` and `CancelRun` only change a
-    run's status.
+    A move that lands a task on one of a role's steps queues a run for each
+    of the role's enabled responsibilities (`services/agents/runs.jac`): one
+    active run per task and responsibility, only while the workspace's AI is
+    on, only for a task with a linked pull request, within
+    `AGENT_LIMITS.daily_runs`. The move's log line says what was queued or
+    why nothing was.
 
 Every refusal is `{"ok": false, "error": <code>, "message": <text>}`.
 

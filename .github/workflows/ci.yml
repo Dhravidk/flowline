@@ -187,6 +187,9 @@ jobs:
       - name: Automation gate (entry rules, label, merge and review triggers, PR linking)
         run: python3 tests/smoke/automation_gate.py http://localhost:8000 http://127.0.0.1:8099
 
+      - name: Agents gate (AI responsibilities queued on a move, the runner, the review service)
+        run: python3 tests/smoke/agents_gate.py http://localhost:8000 http://127.0.0.1:8099
+
       - name: Two worker processes are serving
         run: grep -E "supervising [2-9][0-9]* worker" serve.log
 

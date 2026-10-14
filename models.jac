@@ -492,7 +492,12 @@ node AgentRun {
         tokens_in: int = 0,
         tokens_out: int = 0,
         cost_usd: float = 0.0,
-        # The queue's row for this run, "" until it is queued.
+        # The runner's bookkeeping: tries so far, when the claim on a running
+        # run lapses (a pod that died mid-review), and when a queued run is
+        # due (a retry waits out its backoff).
+        attempts: int = 0,
+        lease_until: str = "",
+        next_try_at: str = "",
         job_id: str = "",
         queued_at: str = "",
         started_at: str = "",
@@ -571,7 +576,10 @@ node Logs {}
 # it on, and nothing is queued while it is off.
 node AgentRuns {
     has enabled: bool = False,
-        enabled_at: str = "";
+        enabled_at: str = "",
+        # Runs queued on the current UTC day ("2026-10-14" -> n), for
+        # AGENT_LIMITS' daily_runs; a new day replaces the old count.
+        day_counts: dict[str, int] = {};
 }
 
 # The board's filters as the account left them (`board`, only the keys set
@@ -1094,6 +1102,21 @@ def run_by_key(holder: Root, said: str) -> list[AgentRun] {
     out: list[AgentRun] = [];
     for box in [holder-->[?:AgentRuns]] {
         out.extend([box-->[?:AgentRun, run_key==said]]);
+    }
+    return out;
+}
+
+
+# A task's queued or running run of one responsibility, if any: the check
+# that keeps a second move from queuing the same review again.
+def active_run(holder: Root, tid: str, rid: str) -> list[AgentRun] {
+    out: list[AgentRun] = [];
+    for box in [holder-->[?:AgentRuns]] {
+        for r in [box-->[?:AgentRun, task_id==tid, responsibility_id==rid]] {
+            if r.status == "queued" or r.status == "running" {
+                out.append(r);
+            }
+        }
     }
     return out;
 }
