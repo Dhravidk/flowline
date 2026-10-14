@@ -827,6 +827,8 @@ obj AgentRunView {
         tokens_in: int,
         tokens_out: int,
         cost_usd: float,
+        attempts: int,
+        next_try_at: str,
         queued_at: str,
         started_at: str,
         finished_at: str;
@@ -879,6 +881,8 @@ def agent_run_view(r: AgentRun) -> AgentRunView {
         tokens_in=r.tokens_in,
         tokens_out=r.tokens_out,
         cost_usd=r.cost_usd,
+        attempts=r.attempts,
+        next_try_at=r.next_try_at,
         queued_at=r.queued_at,
         started_at=r.started_at,
         finished_at=r.finished_at

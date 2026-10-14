@@ -268,7 +268,8 @@ glob STATUSES: list[str] = [
          "max_input_tokens": 200000,
          "files_in_flight": 4,
          "max_comments": 20,
-         "max_instructions": 2000
+         "max_instructions": 2000,
+         "max_attempts": 3
      },
      # Kind -> legacy status. A move writes both, so insights, GitHub sync
      # and the assistant never have to learn what a step is.

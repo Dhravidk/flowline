@@ -106,7 +106,15 @@ people it tracks are roster members.
   box, off by default, and a task's runs; `ListResponsibilities` is a
   declared reader, `ListRuns` never cached; `runs.jac` queues a role's
   responsibilities from `landing_tail`, so every kind of move queues, and
-  notes the workspace in the `ai_queue` docs-store index the runner reads),
+  notes the workspace in the `ai_queue` docs-store index; `runner.jac` is a
+  `@schedule` function like the GitHub sync that, per workspace under the
+  `ai:<root>` lease, claims due runs in the workspace's pushed context and
+  commits, awaits `review_pr` on the review service outside any context, then
+  applies each answer in a fresh context only if the run is still on the
+  attempt that asked (a run whose `lease_until` lapsed is reclaimed); the
+  installation token rides in the call because the review service may not
+  read the graph; `FLOWLINE_FAKE_LLM`, `FLOWLINE_AI_INTERVAL_SECONDS`,
+  `_BACKOFF_SECONDS` and `_LEASE_SECONDS` are the gates' knobs),
   `filters` (the
   saved-filter writers),
   `workspace` (`GetWorkspace`: the roster, projects, flow line, repos,
