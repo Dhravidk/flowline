@@ -541,6 +541,10 @@ File-based routing with route groups:
   Organization also holds the AI switch (`AiSwitch`, `SetAiEnabled`) and the
   notice of what turning it on sends; the page reads it with
   `ListResponsibilities` beside the workspace (only this page shows it).
+  The Roles tab lists a managed role's AI responsibilities under its row
+  (`components/workspace/roles/`: a line each with its own switch, add
+  buttons from `AI_RESPONSIBILITIES`, and the editor dialog); a free-text
+  role has no `Role` node, so it gets none until it is added as a role.
   The page loads one `GetWorkspace` and hands the Projects and Roles
   sections their lists as props (open counts are the projects' own
   tallies), so a tab switch is a render, not a request; a section's write

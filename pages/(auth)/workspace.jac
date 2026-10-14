@@ -5,7 +5,14 @@ GitHub section, since the GitHub App sends its install round trip there."""
 
 import from "@jac/runtime" { useLocation }
 import from "react" { useEffect }
-import from ...models { Project, MemberView, RoleView, RepoView, StepView }
+import from ...models {
+    Project,
+    MemberView,
+    RoleView,
+    RepoView,
+    StepView,
+    ResponsibilityView
+}
 import from ...lib.session { fetchOrgName, cachedOrgName }
 import from ...services.roster.roster {
     ListMembers,
@@ -88,6 +95,7 @@ def:pub WorkspacePage -> JsxPage {
         aiEnabled: bool = False,
         aiSince: str = "",
         aiLoading: bool = True,
+        aiItems: list[ResponsibilityView] = [],
         # Read during the first render, so the deep-linked section paints
         # straight away instead of flipping after an effect.
         tab: str = initialTab(),
@@ -319,6 +327,9 @@ def:pub WorkspacePage -> JsxPage {
                                 loading={loading}
                                 onChanged={loadAll}
                                 onPeople={lambda { selectTab("people"); }}
+                                responsibilities={aiItems}
+                                aiEnabled={aiEnabled}
+                                onOrganization={lambda { selectTab("organization"); }}
                             />
                         } elif tab == "github" {
                             <GithubSection key="github"/>

@@ -1,10 +1,11 @@
 """Roles: the link between people and the flow line. Each row says who holds
 the role (assigned right here) and which steps name it as their owner, and
-renames or deletes it from its own menu. The lists are the page's (one
-workspace read); a write here refetches through the page's own loader.
+renames or deletes it from its own menu, and a managed role lists its AI
+responsibilities under the row. The lists are the page's (one workspace read
+plus the AI settings); a write here refetches through the page's own loader.
 """
 
-import from ...models { MemberView, RoleView, StepView }
+import from ...models { MemberView, RoleView, StepView, ResponsibilityView }
 import from ...lib.workspace { forgetWorkspace }
 import from ...services.roster.roster { SaveRole, DeleteRole, SetMemberRoles }
 import from ..common.StepName { StepName }
@@ -17,6 +18,7 @@ import from .ConfirmDialog { ConfirmDialog }
 import from .RowActions { RowActions }
 import from .SectionHeader { SectionHeader }
 import from .icons { IconPlus }
+import from .roles.Responsibilities { Responsibilities }
 import from "sonner" { toast }
 
 
@@ -26,7 +28,10 @@ def:pub RolesSection(
     steps: list[StepView] = [],
     loading: bool = False,
     onChanged: Callable[[], any] = None,
-    onPeople: Callable[[], None] = None
+    onPeople: Callable[[], None] = None,
+    responsibilities: list[ResponsibilityView] = [],
+    aiEnabled: bool = False,
+    onOrganization: Callable[[], None] = None
 ) -> JsxElement {
     has saving: bool = False,
         busy: bool = False,
@@ -67,13 +72,13 @@ def:pub RolesSection(
     cards: list[dict[str, str]] = [];
     for r in roles {
         known.append(r.name);
-        cards.append({"name": r.name, "blurb": r.blurb, "color": r.color});
+        cards.append({"id": r.id, "name": r.name, "blurb": r.blurb, "color": r.color});
     }
     for m in active {
         for held in m.roles {
             if held not in known {
                 known.append(held);
-                cards.append({"name": held, "blurb": "", "color": ""});
+                cards.append({"id": "", "name": held, "blurb": "", "color": ""});
             }
         }
     }
@@ -344,6 +349,22 @@ def:pub RolesSection(
                                         </div>
                                     </div>
                                 } }
+                                {if card["id"] and editingRole != card["name"] {
+                                    <Responsibilities
+                                        key="ai"
+                                        roleId={card["id"]}
+                                        roleName={card["name"]}
+                                        items={[
+                                            x
+                                            for x in responsibilities
+                                            if x.role_id == card["id"]
+                                        ]}
+                                        steps={steps}
+                                        aiEnabled={aiEnabled}
+                                        onChanged={onChanged}
+                                        onOrganization={onOrganization}
+                                    />
+                                }}
                             </li>
                         }}
                     </ul>

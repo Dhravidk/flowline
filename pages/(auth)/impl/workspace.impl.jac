@@ -34,6 +34,7 @@ impl WorkspacePage.loadAi -> None {
         if settings {
             aiEnabled = bool(settings.enabled);
             aiSince = settings.enabled_at or "";
+            aiItems = settings.responsibilities;
         }
     } except Exception as e {
         toast.error("Could not load the AI settings");
