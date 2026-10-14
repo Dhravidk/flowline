@@ -75,6 +75,29 @@ interval (the CI serve job sets 30 to observe a pass) and
 sets 2, below the workspaces its gate binds, so a tick really caps); a
 deployment leaves both unset.
 
+## AI responsibilities
+
+The runner (`services/agents/runner.jac`) is a scheduled function, like the
+GitHub sync: every 30 seconds it claims queued AI runs and calls the PR
+review service, its own pod (`pr-review`).
+
+| Signal | Where |
+| --- | --- |
+| One line per settled attempt | `flowline.agents`: `ai run workspace=… run=… key=… attempt=… outcome=done\|retry\|failed\|skipped ms=… tokens=… cost_usd=…`. No pull request content is ever logged. |
+| `flowline_ai_runs_total{key, outcome}` | Runs settled, by outcome. |
+| `flowline_ai_run_seconds{key}` | Time the review service took, a histogram. |
+| `flowline_ai_tokens_total{direction}` | Model tokens, `in` and `out`. |
+| `flowline_ai_cost_usd_total{workspace}` | Model cost per workspace. |
+
+The `flowline_ai_*` series sit on the app's `/metrics` when it serves more
+than one worker, which every deployed pod does: the endpoint merges all
+workers' metric files. A single-worker `jac run` shows Jac's own series only.
+
+**Kill switch.** Set `FLOWLINE_AGENTS_PAUSED=1` on the project and deploy:
+the runner claims nothing and logs that it is paused, moves keep queuing,
+and every queued run waits until the variable is removed. To stop new runs
+for one workspace, its owner turns AI off under Workspace, Organization.
+
 ## Changing a running deployment
 
 | Change | How |

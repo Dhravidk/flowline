@@ -178,6 +178,9 @@ jobs:
             echo "FLOWLINE_AI_INTERVAL_SECONDS=5"
             echo "FLOWLINE_AI_BACKOFF_SECONDS=2"
             echo "FLOWLINE_AI_LEASE_SECONDS=8"
+            # /metrics answers basic auth with this password; the agents gate
+            # reads the AI counters there.
+            echo "GRAFANA_ADMIN_PASSWORD=ci-grafana"
           } >> "$GITHUB_ENV"
 
       - name: Serve the app (jac run --no-dev, background)
