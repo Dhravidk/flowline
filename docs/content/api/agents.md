@@ -15,6 +15,13 @@ the workspace's AI switch and a task's runs. Source:
     `AGENT_LIMITS.daily_runs`. The move's log line says what was queued or
     why nothing was.
 
+    The runner (`services/agents/runner.jac`, a scheduled function) then
+    claims due runs for each workspace with queued work, awaits the PR
+    review service for them, and writes the result on the run and the task's
+    log. A GitHub 5xx or an unreachable review service is retried with
+    backoff, up to `AGENT_LIMITS.max_attempts`; a 403 or a closed PR is not.
+    A commit already reviewed by the same responsibility is skipped.
+
 Every refusal is `{"ok": false, "error": <code>, "message": <text>}`.
 
 ## Settings

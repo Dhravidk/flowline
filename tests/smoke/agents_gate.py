@@ -2,16 +2,21 @@
 """Smoke test for AI responsibilities against a running server and
 github_stub.py: a move onto a role's step queues the role's responsibilities
 (once per task while one is active), the AI switch, a missing PR and a
-switched-off responsibility each skip with a log line, and another workspace
-sees none of it. Reuses webhook_gate's helpers.
+switched-off responsibility each skip with a log line, another workspace sees
+none of it, and the scheduled runner reviews a queued run (FLOWLINE_FAKE_LLM),
+retries a 5xx, fails a 403, skips a closed PR and a commit already reviewed,
+and takes a run back whose claim lapsed. Reuses webhook_gate's helpers.
 Usage: agents_gate.py [base_url] [stub_url]"""
 import json
 import sys
+import time
 
 import webhook_gate as wg
-from webhook_gate import check, walker, project, req
+from webhook_gate import check, walker, project, req, connect
 
 REPO = "ci-org/agents-repo"
+INST = 4747
+SETTLED = ("done", "failed", "skipped", "cancelled")
 
 
 def reports(name, body=None):
@@ -110,10 +115,99 @@ def queue_suite():
     return tid
 
 
+def settle(task_id, want=1, timeout=90):
+    """Wait for the task's newest `want` runs to finish; the runner ticks
+    every FLOWLINE_AI_INTERVAL_SECONDS."""
+    deadline = time.time() + timeout
+    rows = runs(task_id)
+    while time.time() < deadline:
+        rows = runs(task_id)
+        if len(rows) >= want and all(r.get("status") in SETTLED for r in rows[:want]):
+            return rows
+        time.sleep(2)
+    return rows
+
+
+def stub(path, body):
+    status, _ = req(wg.STUB, "POST", path, body, auth=False)
+    return status == 200
+
+
+def pull(number, head, state="open"):
+    return {"repo": REPO, "number": number, "head_sha": head, "state": state}
+
+
+def runner_suite():
+    stub("/_stub/reset", {"installations": [INST], "repos": {REPO: []}})
+    stub("/_stub/pulls", {"pulls": [pull(7, "sha-7a"), pull(8, "sha-8"), pull(9, "sha-9"),
+                                    pull(10, "sha-10", "closed"), pull(11, "sha-11")]})
+    wg.login("runner")
+    check("runner: connect GitHub", connect(INST).get("ok"))
+    pid = project()
+    role = walker("SaveRole", {"name": "Product Engineer"}).get("role", {})
+    walker("SaveRole", {"name": "Developer"})
+    bid = walker("SaveStep", {"name": "Building", "kind": "active", "owner": "Developer"}).get("id", "")
+    rid = walker("SaveStep", {"name": "In review", "kind": "handoff", "owner": "Product Engineer"}).get("id", "")
+    walker("SaveResponsibility", {"role_id": role["id"], "on_steps": [rid], "instructions": "Check errors."})
+    walker("SetAiEnabled", {"enabled": True})
+
+    def landed(title, number):
+        t = walker("CreateTask", {"title": title, "project_id": pid, "step_id": bid})
+        t = update(t, pr_link=f"https://github.com/{REPO}/pull/{number}")
+        move(t["id"], rid)
+        return t["id"]
+
+    a = landed("Reviewed once", 7)
+    done = settle(a)
+    first = done[0] if done else {}
+    check("runner: a queued run is reviewed", first.get("status") == "done" and first.get("verdict") == "comment"
+          and first.get("head_sha") == "sha-7a" and first.get("model") == "fake", done)
+    check("  and the task's log says so", any("AI code review · 0 comments, 0 blocking" in x for x in task_log(a)),
+          task_log(a))
+    calls = [c[1] for c in wg.stub_calls(INST)]
+    check("  reading the PR with the installation's token", f"/repos/{REPO}/pulls/7" in calls, calls)
+    move(a, bid)
+    move(a, rid)
+    again = settle(a, 2)
+    check("runner: the same commit is not reviewed twice", len(again) == 2 and again[0].get("status") == "skipped"
+          and "already reviewed" in again[0].get("error", ""), again)
+
+    stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/8", "status": 502, "times": 1})
+    b = landed("Retried after a 5xx", 8)
+    retried = settle(b, 1, 120)
+    check("runner: a GitHub 5xx is retried, then succeeds", retried and retried[0].get("status") == "done"
+          and retried[0].get("attempts") == 2, retried)
+
+    stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/9", "status": 403, "times": 5})
+    c = landed("Refused with a 403", 9)
+    refused = settle(c)
+    check("runner: a 403 fails at once", refused and refused[0].get("status") == "failed"
+          and refused[0].get("attempts") == 1 and "403" in refused[0].get("error", ""), refused)
+    check("  and the task's log says why", any("AI code review failed" in x for x in task_log(c)), task_log(c))
+
+    d = landed("Closed PR", 10)
+    closed = settle(d)
+    check("runner: a closed PR is skipped", closed and closed[0].get("status") == "skipped"
+          and "closed" in closed[0].get("error", ""), closed)
+
+    stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/11", "times": 1, "delay": 20})
+    e = landed("Claim lapsed", 11)
+    lapsed = settle(e, 1, 150)
+    check("runner: a run whose claim lapsed is taken back and finished once",
+          lapsed and lapsed[0].get("status") == "done" and lapsed[0].get("attempts") == 2, lapsed)
+
+
+
 def main() -> int:
     if not check("server ready within timeout", wg.wait_ready()):
         return 2
-    queue_suite()
+    unconnected = queue_suite()
+    queued_home = wg.TOKEN
+    runner_suite()
+    wg.TOKEN = queued_home
+    gone = settle(unconnected)
+    check("runner: a workspace with no GitHub connection fails its run",
+          gone and gone[0].get("status") == "failed" and "not connected" in gone[0].get("error", ""), gone)
     print("agents gate: " + ("PASS" if not wg.FAILS else f"FAIL ({len(wg.FAILS)})"))
     return 1 if wg.FAILS else 0
 
