@@ -7,7 +7,9 @@ none of it, and the scheduled runner reviews a queued run (FLOWLINE_FAKE_LLM),
 retries a 5xx, fails a 403, skips a closed PR and a commit already reviewed,
 and takes a run back whose claim lapsed. Reuses webhook_gate's helpers.
 Usage: agents_gate.py [base_url] [stub_url]"""
+import base64
 import json
+import os
 import sys
 import time
 
@@ -318,6 +320,13 @@ def main() -> int:
     gone = settle(unconnected)
     check("runner: a workspace with no GitHub connection fails its run",
           gone and gone[0].get("status") == "failed" and "not connected" in gone[0].get("error", ""), gone)
+    password = os.environ.get("GRAFANA_ADMIN_PASSWORD", "ci-grafana")
+    auth = "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()
+    status, raw = req(wg.BASE, "GET", "/metrics", headers={"Authorization": auth}, auth=False)
+    text = raw.decode(errors="replace")
+    check("metrics: /metrics counts AI runs by outcome",
+          status == 200 and 'flowline_ai_runs_total{key="code_review",outcome="done"}' in text
+          and 'outcome="failed"' in text and "flowline_ai_run_seconds_bucket" in text, (status, text[:200]))
     print("agents gate: " + ("PASS" if not wg.FAILS else f"FAIL ({len(wg.FAILS)})"))
     return 1 if wg.FAILS else 0
 

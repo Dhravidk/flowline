@@ -33,6 +33,7 @@ import from services.log.log { record_task_event }
 import from services.tasks.tasks { follow_trigger }
 import from services.agents.runs { AI_QUEUE, catalogue_name }
 import from review.service { review_pr }
+import from services.agents.metrics { note_run }
 
 # Seconds from an environment knob, never below `floor`. The gates shorten
 # them; a deployment keeps the defaults.
@@ -383,8 +384,20 @@ def apply(holder: Root, results: list[dict[str, any]]) {
             finish(holder, run, "failed", error, now);
             outcome = "failed";
         }
+        note_run(
+            run.key,
+            outcome,
+            int(res.get("ms") or 0),
+            jid(holder),
+            run.tokens_in if outcome == "done" else 0,
+            run.tokens_out if outcome == "done" else 0,
+            run.cost_usd if outcome == "done" else 0.0
+        );
+        # One line per settled attempt, and never the PR's content.
         log.info(
-            "ai run "
+            "ai run workspace="
+                + jid(holder)
+                + " run="
                 + jid(run)
                 + " key="
                 + run.key
@@ -394,6 +407,10 @@ def apply(holder: Root, results: list[dict[str, any]]) {
                 + outcome
                 + " ms="
                 + str(res.get("ms") or 0)
+                + " tokens="
+                + str(run.tokens_in + run.tokens_out)
+                + " cost_usd="
+                + str(round(run.cost_usd, 6))
         );
     }
 }
@@ -420,6 +437,11 @@ def run_workspace(root_jid: str) {
 
 @schedule(trigger=ScheduleTrigger.STATIC, interval=INTERVAL_SECONDS)
 def run_ai_reviews {
+    # The kill switch: nothing is claimed, and queued runs wait for it to lift.
+    if os.environ.get("FLOWLINE_AGENTS_PAUSED") == "1" {
+        log.info("ai runner: paused by FLOWLINE_AGENTS_PAUSED, queued runs wait");
+        return;
+    }
     owner = lease_owner();
     db = shared_store();
     for root_jid in queued_workspaces(WORKSPACES_PER_TICK) {

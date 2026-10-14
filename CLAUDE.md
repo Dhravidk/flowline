@@ -114,7 +114,10 @@ people it tracks are roster members.
   attempt that asked (a run whose `lease_until` lapsed is reclaimed); the
   installation token rides in the call because the review service may not
   read the graph; `FLOWLINE_FAKE_LLM`, `FLOWLINE_AI_INTERVAL_SECONDS`,
-  `_BACKOFF_SECONDS` and `_LEASE_SECONDS` are the gates' knobs),
+  `_BACKOFF_SECONDS` and `_LEASE_SECONDS` are the gates' knobs;
+  `FLOWLINE_AGENTS_PAUSED=1` stops it claiming; `metrics.jac` counts runs
+  with plain `prometheus_client` counters, which `/metrics` serves only when
+  it merges several workers' files, the deployed case),
   `filters` (the
   saved-filter writers),
   `workspace` (`GetWorkspace`: the roster, projects, flow line, repos,
