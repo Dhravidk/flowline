@@ -22,6 +22,12 @@ the workspace's AI switch and a task's runs. Source:
     backoff, up to `AGENT_LIMITS.max_attempts`; a 403 or a closed PR is not.
     A commit already reviewed by the same responsibility is skipped.
 
+    The review is posted on the pull request as one GitHub review on the
+    reviewed commit, with inline comments on the lines the findings name. In
+    request-changes mode, a review with a blocking finding is posted as
+    `REQUEST_CHANGES` and sends the task back along its step's "changes
+    requested" arrow, if the task is still on the step the run was queued for.
+
 Every refusal is `{"ok": false, "error": <code>, "message": <text>}`.
 
 ## Settings
