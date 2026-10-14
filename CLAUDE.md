@@ -903,6 +903,12 @@ fixed by its #1808); the platform now resolves either spelling to the file.
   trigger and no muted styling. Seed `""` for "nothing picked" (project on
   the task sheet and the repo picker); keep a sentinel only where an item
   carries it (the reviewer's "No reviewer").
+- **Put a `by llm()` function's rules in the function's own `sem`.** A
+  field-level `sem` (`sem Finding.severity = ...`) shaped the answer when
+  `review/engine.jac` ran on its own, but not once the same module ran as part
+  of the `pr_review` service app: the model ignored the severity definitions
+  until they moved into `sem review_file`. Keep field `sem`s too; they cost
+  nothing.
 - Client-side: `is None` misses `undefined`; `params["id"]`, never `.get()`;
   rebind state rather than mutating.
 

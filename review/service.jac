@@ -6,6 +6,7 @@ nothing here reads or writes a workspace's graph."""
 import os;
 import time;
 import from review.github { gh }
+import from review.engine { run_review }
 
 # What a review reports back. `retryable` tells the runner to try again later
 # rather than fail the run (a GitHub 5xx, a model timeout).
@@ -78,16 +79,33 @@ def:protect review_pr(
             head_sha=head
         );
     }
-    if os.environ.get("FLOWLINE_FAKE_LLM") == "1" {
+    done = run_review(token, repo, pr_number, intent, instructions, model);
+    if not done["ok"] {
         return ReviewOutcome(
-            ok=True,
-            verdict="comment",
-            summary="A fixed review from the fake reviewer.",
-            head_sha=head,
-            model="fake"
+            ok=False,
+            error=str(done["error"]),
+            retryable=bool(done["retryable"]),
+            head_sha=head
         );
     }
+    found = done["findings"];
+    blocking = len(
+        [
+            f
+            for f in found
+            if f.severity == "blocking"
+        ]
+    );
     return ReviewOutcome(
-        ok=False, error="The reviewer is not built yet.", head_sha=head
+        ok=True,
+        verdict="request_changes" if blocking else "comment",
+        summary=str(done["summary"]),
+        comments=len(found),
+        blocking=blocking,
+        head_sha=head,
+        model=str(done["model"]),
+        tokens_in=int(done["tokens_in"]),
+        tokens_out=int(done["tokens_out"]),
+        cost_usd=float(done["cost_usd"])
     );
 }

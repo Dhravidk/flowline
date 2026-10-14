@@ -190,6 +190,23 @@ def runner_suite():
     check("runner: a closed PR is skipped", closed and closed[0].get("status") == "skipped"
           and "closed" in closed[0].get("error", ""), closed)
 
+    patch = "@@ -1,3 +1,5 @@\n import os\n+x = compute()  # BUG: wrong unit\n def f():\n+    pass  # TODO handle errors\n     return 1"
+    stub("/_stub/pulls", {"pulls": [dict(pull(12, "sha-12"), files=[
+        {"filename": "app/service.py", "status": "modified", "additions": 2, "deletions": 0, "patch": patch},
+        {"filename": "package-lock.json", "status": "modified", "additions": 900, "deletions": 3, "patch": "@@ -1 +1 @@\n-a\n+b"},
+        {"filename": "old.py", "status": "removed", "additions": 0, "deletions": 10, "patch": "@@ -1 +0,0 @@\n-x"},
+        {"filename": "logo.png", "status": "added", "additions": 0, "deletions": 0},
+    ])]})
+    f = landed("Findings on added lines", 12)
+    found = settle(f)
+    row = found[0] if found else {}
+    check("engine: findings land on added lines, lock, removed and binary files skipped",
+          row.get("status") == "done" and row.get("comments") == 2 and row.get("blocking") == 1
+          and row.get("verdict") == "request_changes", row)
+    check("  and the task's log counts them", any("2 comments, 1 blocking" in x for x in task_log(f)), task_log(f))
+    files = [c[1] for c in wg.stub_calls(INST) if c[1].endswith("/pulls/12/files")]
+    check("  reading the PR's files once", len(files) == 1, files)
+
     stub("/_stub/fault", {"method": "GET", "path": f"/repos/{REPO}/pulls/11", "times": 1, "delay": 20})
     e = landed("Claim lapsed", 11)
     lapsed = settle(e, 1, 150)
