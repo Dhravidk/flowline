@@ -18,6 +18,24 @@ STATE = {"installations": [], "repos": {}, "next_number": 1000, "calls": [], "la
 LOCK = threading.Lock()
 
 
+def added_lines(patch):
+    # New-file line numbers the patch adds, as GitHub accepts review comments on.
+    out, line = set(), 0
+    for raw in (patch or "").split("\n"):
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+        if m:
+            line = int(m.group(1))
+            continue
+        if raw.startswith("+") and not raw.startswith("+++"):
+            out.add(line)
+            line += 1
+        elif raw.startswith("-") and not raw.startswith("---"):
+            continue
+        elif line:
+            line += 1
+    return out
+
+
 def issue_item(repo, number, title, state, updated, closed=None, pull=None):
     item = {
         "number": number, "title": title, "state": state, "body": "", "labels": [],
@@ -202,6 +220,24 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(422, {"message": "Validation Failed"})
                 made.append(body.get("name"))
                 return self._send(201, {"name": body.get("name"), "color": body.get("color")})
+            # A pull request review, refused (422) when a comment names a line the
+            # diff does not add, as GitHub does.
+            m = re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls/(\d+)/reviews", url.path)
+            if m:
+                pr = STATE["pulls"].get(f"{m.group(1)}#{m.group(2)}")
+                if not pr:
+                    return self._send(404, {"message": "Not Found"})
+                allowed = {f["filename"]: added_lines(f.get("patch")) for f in pr["files"]}
+                for c in body.get("comments") or []:
+                    if c.get("line") not in allowed.get(c.get("path"), set()):
+                        return self._send(422, {"message": "Unprocessable Entity",
+                                                "errors": ["Line could not be resolved"]})
+                rid = len(STATE["reviews"]) + 1
+                STATE["reviews"].append({"repo": m.group(1), "number": int(m.group(2)), "id": rid,
+                                         "event": body.get("event"), "commit_id": body.get("commit_id"),
+                                         "body": body.get("body"), "comments": body.get("comments") or []})
+                return self._send(200, {"id": rid, "state": "COMMENTED",
+                                        "html_url": f"https://github.com/{m.group(1)}/pull/{m.group(2)}#pullrequestreview-{rid}"})
             m = re.fullmatch(r"/repos/([^/]+/[^/]+)/issues", url.path)
             if m:
                 repo = m.group(1)
