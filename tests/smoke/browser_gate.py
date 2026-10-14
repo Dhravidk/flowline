@@ -180,7 +180,7 @@ def ai_switch_once(page) -> None:
     page.goto(f"{BASE}/workspace?tab=organization")
     switch = page.get_by_role("switch", name="AI responsibilities")
     expect(switch).to_have_attribute("aria-checked", "false")
-    expect(page.get_by_text("The linked issue's title and description.", exact=True)).to_be_visible()
+    expect(page.get_by_text("The task's title and the first line of its notes.", exact=True)).to_be_visible()
 
     step("workspace: turning AI on is kept across a reload")
     switch.click()

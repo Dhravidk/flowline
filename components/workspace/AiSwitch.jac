@@ -52,7 +52,7 @@ def:pub AiSwitch(
                         <li>
                             The changed files of the task's linked pull request: the diff, never the whole repository.
                         </li>
-                        <li>The linked issue's title and description.</li>
+                        <li>The task's title and the first line of its notes.</li>
                         <li>Your team's instructions for that responsibility.</li>
                     </ul>
                     <p className="text-[12.5px] text-muted-foreground">
