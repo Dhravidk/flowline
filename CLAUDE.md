@@ -697,17 +697,30 @@ File-based routing with route groups:
 
 ### Deploy sizing
 
-The app stays declared as `[project] kind/entry-point`, and the app pod is
-sized in `[scale.kubernetes]` (`cpu_request`, `cpu_limit`, `memory_request`,
-`memory_limit` are all honoured there; the gateway pod is sized in
-`[scale.gateway]`). **Do not move it to `[apps.flowline]`.** On jac 0.37.7 an
-`[apps]` table makes `jac scale deploy` skip the client bundle build (the
-dry run's third line says "The served app has no client target"), so the
-pods come up API-only and `/` is a JSON 404 while `jac run` still serves
-the app locally (this took flowline-dev down on 2026-09-08, PR #176). That
-table is also the only home of `workers = "auto"`, so the worker count is
-fixed instead: `[serve.workers] count = "2"` becomes `JAC_SERVE_WORKERS=2`
-on the app pod (and on the gateway pod, which has no override of its own);
+Two apps: `[apps.flowline]` (`kind = "web-app"`, `entry-point = "main"`) and
+`[apps.pr_review]` (`kind = "service"`, `entry-point = "review.service"`), so
+a deploy runs three Deployments (gateway, `flowline`, `pr-review`); an
+`[apps]` table forbids `kind`/`entry-point` under `[project]`. The web app
+pod is sized in `[scale.kubernetes]` (`cpu_request`, `cpu_limit`,
+`memory_request`, `memory_limit`), the gateway in `[scale.gateway]`, the
+review pod in `[apps.pr_review.scale]` (with `rpc_timeout = 300`: a bridged
+call's default 10 s would cut every review short). On jac 0.37.7 an `[apps]`
+table made the deploy skip the client bundle (flowline-dev went API-only on
+2026-09-08, PR #176); 0.37.11+ builds it, and the deploy gate checks the dry
+run says so. Locally a plain `jac run` loads the review service into the web
+app's process; `jac run flowline --fleet` runs it apart, logging to
+`.jac/logs/<app>.log`. The web app reaches it through `def:protect`
+functions it awaits (a bridged walker's reports join the caller's when
+colocated, so functions, not walkers); a call with no user behind it carries
+`JAC_BRIDGE_TOKEN` and runs as `__bridge__`, which owns no workspace, so the
+service never reads or writes a tenant graph. **The token is a pod's start
+-time env**: `[scale.secrets]` declares it, it must be set before the deploy
+that ships the service, and a change needs a deploy of new source (a redeploy
+of unchanged source keeps the pods; jachammer test project, 2026-10-14). The
+outbox (un-awaited cross-app spawns) is not used: with more than one worker
+process it never delivers (jaseci-labs/jac#9881). The worker count is fixed:
+`[serve.workers] count = "2"` becomes `JAC_SERVE_WORKERS=2`
+on every pod (the gateway and the review pod have no override of their own);
 keep it equal to the cores in `cpu_limit` (#140). Never write `"auto"`
 there: the manifest builder resolves it on the deploying machine, not in
 the pod (this Mac renders 10). The HPA scales on memory too (80% of the
@@ -724,7 +737,7 @@ once `bundle_storage_class` is set to any name (a placeholder for the RWX
 check that a real deploy satisfies on the platform); `tests/smoke/
 deploy_gate.py` asserts its transcript in CI.
 
-**`[project] entry-point` is the dotted module name, `main`.** jac 0.37.12+
+**`[apps.flowline] entry-point` is the dotted module name, `main`.** jac 0.37.12+
 refuses `"main.jac"` on load. The jachammer deploy manager used to check the
 key as a file path, so between the pin bump and the platform's 2026-09-14
 release the line had to be omitted entirely (jaseci-labs/jacBuilder#1806,

@@ -1,9 +1,11 @@
 """AI responsibility walkers: a role's responsibilities, the workspace's AI
 switch and a task's runs. A responsibility hangs under its role and a run
 under the AgentRuns box, so every jid-addressed write resolves the row and
-checks owned() first. Queuing and cancelling the run's job come with the
-job queue (#279); here a retry or a cancel moves the run's own status."""
+checks owned() first. A retry or a cancel moves the run's own status; the
+runner (#280) is what calls the review service."""
 
+import time;
+import logging;
 import from jaclang.lib.effects { effects }
 import from models {
     Role,
@@ -25,8 +27,11 @@ import from models {
 }
 import from constants { AI_RESPONSIBILITIES, AGENT_LIMITS }
 import from services.util { now_iso }
+import from review.service { review_ping }
+import from jaclang.server.bridge { BridgeError }
 
-glob MODEL_NAME_MAX: int = 100;
+glob MODEL_NAME_MAX: int = 100,
+     log: logging.Logger = logging.getLogger("flowline.agents");
 
 def refusal(error: str, message: str) -> dict[str, any] {
     return {"ok": False, "error": error, "message": message};
@@ -308,5 +313,25 @@ walker:protect CancelRun(find_run) {
         here.finished_at = now_iso();
         report {"ok": True, "run": agent_run_view(here)};
         disengage;
+    }
+}
+
+walker:protect CheckReviewService {
+    """Whether the PR review service answers, and how fast. A service that is
+    down or still starting reports `ok: false`; the reason goes to the log."""
+    has reports: list[dict[str, any]] = [];
+
+    async can check with Root entry {
+        started = time.monotonic();
+        try {
+            answer = await review_ping();
+            report {
+                "ok": bool(answer["ok"]),
+                "ms": int((time.monotonic() - started) * 1000)
+            };
+        } except BridgeError as e {
+            log.warning("review service unavailable: " + str(e));
+            report refusal("unavailable", "The review service is not answering.");
+        }
     }
 }

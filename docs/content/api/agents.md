@@ -78,3 +78,14 @@ Cancels a `queued` or `running` run.
 
 **Reports** `{"ok": true, "run": `[`AgentRunView`](types.md#agentrunview)`}`.
 **Refuses** `not_cancellable` or `not_found`.
+
+## Review service
+
+::: walker CheckReviewService h3
+
+Calls the PR review service, its own app (`[apps.pr_review]`) and, when
+deployed, its own pod.
+
+**Reports** `{"ok": true, "ms"}` when it answers. **Refuses** `unavailable`
+when it does not (still starting, or down); the reason goes to the server
+log only.
