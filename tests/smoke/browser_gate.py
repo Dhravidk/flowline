@@ -4,7 +4,8 @@ setup wizard on the Simple template, land on the board with the create dialog
 open, create a task from the board's New task button and see its card survive
 a reload, check the runtime reads the served effects table, reads /user/me
 once and mounts the pages after the board on the cached workspace until a
-roster write drops it, then land
+roster write drops it, turn on the AI switch and give a role AI code review,
+then land
 on GitHub's install redirect and check the page finishes it with exactly one
 callback. Every step is a real click or keystroke, so a dead button fails here.
 Usage: browser_gate.py [base_url] [stub_url]"""
@@ -165,8 +166,58 @@ def run(page, tag: str) -> list[str]:
     expect(page.get_by_role("heading", name="Overview", exact=True)).to_be_visible()
 
     read_cache_once(page)
+    ai_switch_once(page)
+    ai_responsibility_once(page)
     github_install_once(page)
+    ai_run_once(page)
     return []
+
+
+def ai_switch_once(page) -> None:
+    # The Organization section's AI switch: off in a new workspace, with the
+    # notice of what turning it on sends, and an "on" that survives a reload.
+    step("workspace: the AI switch starts off beside what it sends")
+    page.goto(f"{BASE}/workspace?tab=organization")
+    switch = page.get_by_role("switch", name="AI responsibilities")
+    expect(switch).to_have_attribute("aria-checked", "false")
+    expect(page.get_by_text("The task's title and the first line of its notes.", exact=True)).to_be_visible()
+
+    step("workspace: turning AI on is kept across a reload")
+    switch.click()
+    expect(page.get_by_text("AI responsibilities turned on", exact=True)).to_be_visible()
+    expect(switch).to_have_attribute("aria-checked", "true")
+    page.reload()
+    switch = page.get_by_role("switch", name="AI responsibilities")
+    expect(switch).to_have_attribute("aria-checked", "true")
+    expect(page.get_by_text(re.compile(r"^On since "))).to_be_visible()
+
+
+def ai_responsibility_once(page) -> None:
+    # The Roles tab's AI editor: a new role gets code review with its own
+    # instructions and mode, and both read back after a reload.
+    step("workspace: add a role and give it AI code review")
+    page.goto(f"{BASE}/workspace?tab=roles")
+    page.get_by_role("button", name="Add role", exact=True).first.click()
+    page.get_by_placeholder("Role name").fill("Reviewer")
+    page.get_by_role("button", name="Add role", exact=True).last.click()
+    page.get_by_role("button", name="AI code review", exact=True).click()
+    dialog = page.locator("[role=dialog][data-state=open]")
+    expect(dialog.get_by_text("Code review for Reviewer", exact=True)).to_be_visible()
+    dialog.get_by_role("button", name="Request changes", exact=True).click()
+    dialog.get_by_label("Instructions").fill("Check error handling.")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).to_be_hidden()
+
+    step("workspace: the responsibility reads back after a reload")
+    page.reload()
+    line = page.get_by_role("button", name=re.compile(r"^AI code review · .*may request changes"))
+    expect(line).to_be_visible()
+    line.click()
+    dialog = page.locator("[role=dialog][data-state=open]")
+    expect(dialog.get_by_label("Instructions")).to_have_value("Check error handling.")
+    expect(dialog.get_by_role("button", name="Request changes", exact=True)).to_have_attribute("aria-pressed", "true")
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).to_be_hidden()
 
 
 def read_cache_once(page) -> None:
@@ -319,6 +370,64 @@ def github_install_once(page) -> None:
     settle(page, "/board", "Board")
     page.wait_for_timeout(3000)
     assert not syncs, f"the board open called {syncs}"
+
+
+def api(page, name: str, body: dict):
+    """A walker call as the signed-in browser makes it; the first report."""
+    return page.evaluate(
+        """async ([base, name, body]) => {
+            const r = await fetch(base + "/walker/" + name, {
+                method: "POST",
+                headers: {"Content-Type": "application/json",
+                          "Authorization": "Bearer " + localStorage.getItem("jac_token")},
+                body: JSON.stringify(body),
+            });
+            const d = await r.json();
+            const reports = (d.data && d.data.reports) || d.reports || [];
+            return reports[0];
+        }""",
+        [BASE, name, body],
+    )
+
+
+def ai_run_once(page) -> None:
+    # The task sheet's AI reviews: Reviewer (given code review above) owns
+    # Review, a task with a linked PR lands there, and the sheet follows the
+    # run from the queue to the review on its own (the runner's fake model).
+    step("ai: Review is the Reviewer's, and a task with a PR lands there")
+    repo = "stub-org/ai-repo"
+    body = json.dumps({"pulls": [{"repo": repo, "number": 5, "head_sha": "sha-5"}]}).encode()
+    req = urllib.request.Request(f"{STUB}/_stub/pulls", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        assert resp.status == 200, f"stub pulls {resp.status}"
+    steps = {st["name"]: st for st in api(page, "GetFlowLine", {"with_counts": False})}
+    api(page, "SaveStep", {"step_id": steps["Review"]["id"], "owner": "Reviewer"})
+    first = (api(page, "ListProjects", {}) or [{}])[0]
+    project_id = first.get("id") or first.get("_jac_id", "")
+    made = api(page, "CreateTask", {"title": "Reviewed by AI", "project_id": project_id,
+                                    "step_id": steps["Doing"]["id"]})
+    fields = {k: made.get(k, "") for k in ("title", "category", "priority", "status", "step_id", "due_date",
+                                           "start_date", "notes", "issue_link", "reviewer_id", "review_due",
+                                           "project_id")}
+    fields.update({"task_id": made["id"], "tags": [], "estimate": 0.0, "assignee_ids": [],
+                   "pr_link": f"https://github.com/{repo}/pull/5"})
+    api(page, "UpdateTask", fields)
+    landed = api(page, "MoveTask", {"task_id": made["id"], "step_id": steps["Review"]["id"]})
+    assert landed.get("ai_state") == "queued", f"the move reported {landed.get('ai_state')!r}, expected 'queued'"
+
+    step("ai: the flow line marks Review, the sheet shows the run reviewed")
+    page.goto(f"{BASE}/flowlines")
+    settle(page, "/flowlines", "Flow line")
+    expect(page.locator(f"[data-step='{steps['Review']['id']}'] [data-step-ai]")).to_be_visible()
+    page.goto(f"{BASE}/board?task={made['id']}")
+    settle(page, "/board", "Board")
+    runs = page.get_by_role("region", name="AI reviews")
+    expect(runs).to_be_visible()
+    expect(runs.get_by_text("Reviewed", exact=True)).to_be_visible(timeout=90_000)
+    expect(runs.get_by_role("link", name="View on GitHub")).to_be_visible()
+    # The settled run refetches the task, so the row's chip goes with it.
+    expect(page.get_by_text(re.compile(r"^AI review(ing| queued)$"))).to_have_count(0, timeout=15_000)
 
 
 def main() -> int:

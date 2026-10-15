@@ -1,9 +1,29 @@
 [project]
 name = "flowline"
-# A dotted module name, the only spelling jac 0.37.12+ loads.
-entry-point = "main"
-kind = "web-app"
 jac-version = "==0.37.23"
+default-app = "flowline"
+
+# Two apps, so a deploy runs two Deployments behind one gateway. An [apps]
+# table moves kind and entry-point (a dotted module name) off [project].
+[apps.flowline]
+kind = "web-app"
+entry-point = "main"
+
+# The PR review service: its own pod on deploy, loaded into the web app's
+# process by a plain `jac run` (`jac run flowline --fleet` runs it apart).
+[apps.pr_review]
+kind = "service"
+entry-point = "review.service"
+
+# A review waits on GitHub and a model for up to two minutes; the 10 s default
+# bridged-call timeout would cut every one short.
+[apps.pr_review.scale]
+rpc_timeout = 300.0
+cpu_request = "250m"
+cpu_limit = "1000m"
+memory_request = "1Gi"
+memory_limit = "2Gi"
+hpa = { enabled = true, min = 1, max = 2 }
 
 [jac-shadcn]
 style = "nova"
@@ -103,10 +123,8 @@ k8s_metrics_enabled = false
 
 [scale.kubernetes]
 app_name = "flowline"
-# App pod sizing. Only [apps.flowline.scale] can set workers = "auto", but on
-# jac 0.37.7 an [apps] table makes the deploy skip the client bundle (API-only
-# pods, / is a JSON 404), so the app stays under [project] and the worker
-# count is fixed in [serve.workers] instead.
+# Web app pod sizing. The worker count is fixed in [serve.workers]: "auto"
+# would resolve on the deploying machine, not in the pod.
 cpu_request = "1000m"
 cpu_limit = "2000m"
 # Every HPA jac-scale renders also scales on memory (80% of the request), and
@@ -181,6 +199,13 @@ default = "server"
 # evidence, and a server def:pub here would shadow the effects table.
 "lib.workspace" = "client"
 models = "server"
+"services.agents.agents" = "server"
+"services.agents.runs" = "server"
+"services.agents.runner" = "server"
+"services.agents.metrics" = "server"
+"review.github" = "server"
+"review.engine" = "server"
+"review.post" = "server"
 "services.assistant.assistant" = "server"
 "services.board.board" = "server"
 "services.filters.filters" = "server"
@@ -198,3 +223,10 @@ models = "server"
 "services.tasks.history" = "server"
 "services.util" = "server"
 "services.workspace.workspace" = "server"
+"review.service" = "server"
+
+# Secrets every pod reads from its environment. JAC_BRIDGE_TOKEN signs the web
+# app's calls to the review service when no user is behind them; it is read
+# at pod start, so it must be set before the deploy that ships it.
+[scale.secrets]
+JAC_BRIDGE_TOKEN = "${JAC_BRIDGE_TOKEN}"

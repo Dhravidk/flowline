@@ -65,11 +65,12 @@ branch: `dev` for development, `main` for production.
 
 - [ ] CI is green on the commit: format, lint, type check, and the serve job
       (deploy dry run, API, webhook and browser gates)
-- [ ] `jac.toml` still declares the app under `[project]` with
-      `entry-point = "main"`, and has no `[apps.*]` table
+- [ ] `jac.toml` declares the web app as `[apps.flowline]` with
+      `entry-point = "main"` and the review service as `[apps.pr_review]`
 - [ ] The project's environment has every variable in
       [Production configuration](production.md#environment), including
-      `GITHUB_APP_WEBHOOK_SECRET`
+      `GITHUB_APP_WEBHOOK_SECRET` and `JAC_BRIDGE_TOKEN` (set before the
+      deploy that first ships the review service)
 - [ ] The SSO callbacks and the GitHub App's URLs point at this deployment's
       `HOST`
 - [ ] A Jac version bump was exercised on dev with real walker calls first

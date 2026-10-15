@@ -72,7 +72,11 @@ people it tracks are roster members.
   (an entry hangs under its day; `days_between(root, since, until)` reads
   the days in a date range, filtered in the store's query) and
   `root ++> FilterSets ++> FilterSet` (named filter sets;
-  the box also holds the board's own filters); `Repo` and
+  the box also holds the board's own filters) and
+  `root ++> Roles ++> Role ++> Responsibility` (a role's AI responsibilities,
+  an `AI_RESPONSIBILITIES` key each) and `root ++> AgentRuns ++> AgentRun`
+  (one run of a responsibility on a task, naming both by jid; readers
+  `responsibilities_on_step`, `runs_of_task`, `run_by_key`); `Repo` and
   `GithubConnection` hang off the root directly.
   Typed edges: `AssignedTo`, `OnProject`, `HasRole` (a member's roles are
   edges to `Role` nodes; `MemberView.roles` and the `SaveMember` /
@@ -97,7 +101,27 @@ people it tracks are roster members.
   `first_name` and `last_name`; `full_name()` is the display name.
 - **`services/`**: the API, one folder per section (`projects`, `roster`,
   `tasks`, `board`, `log`, `flowlines`, `insights`, `assistant`,
-  `roadmap` (`RoadmapSnapshot`, one project's dated tasks), `filters` (the
+  `roadmap` (`RoadmapSnapshot`, one project's dated tasks), `agents` (a
+  role's AI responsibilities, the workspace's AI switch on the `AgentRuns`
+  box, off by default, and a task's runs; `ListResponsibilities` is a
+  declared reader, `ListRuns` never cached; `runs.jac` queues a role's
+  responsibilities from `landing_tail`, so every kind of move queues, and
+  notes the workspace in the `ai_queue` docs-store index; `runner.jac` is a
+  `@schedule` function like the GitHub sync that, per workspace under the
+  `ai:<root>` lease, claims due runs in the workspace's pushed context and
+  commits, awaits `review_pr` on the review service outside any context, then
+  applies each answer in a fresh context only if the run is still on the
+  attempt that asked (a run whose `lease_until` lapsed is reclaimed); the
+  installation token rides in the call because the review service may not
+  read the graph; `FLOWLINE_FAKE_LLM`, `FLOWLINE_AI_INTERVAL_SECONDS`,
+  `_BACKOFF_SECONDS` and `_LEASE_SECONDS` are the gates' knobs;
+  `FLOWLINE_AGENTS_PAUSED=1` stops it claiming; `Task.ai_state`
+  (queued or running, the row's AI chip) is kept by `settle_ai` at every
+  write point that moves a run (queue, claim, apply, `RetryRun`,
+  `CancelRun`), so a new one must call it too; `metrics.jac` counts runs
+  with plain `prometheus_client` counters, which `/metrics` serves only when
+  it merges several workers' files, the deployed case),
+  `filters` (the
   saved-filter writers),
   `workspace` (`GetWorkspace`: the roster, projects, flow line, repos,
   roles, saved filter sets, flow line meta and GitHub
@@ -411,8 +435,8 @@ Isolation is structural: authenticated walkers run on the caller's own root, so
 identity), **but resolution is still not authorization.** Every jid-addressed
 mutation must call `owned(holder, target)` (or go through the `find_task`
 lookup base) before touching anything. `owned` climbs
-container edges (at most three hops: task, project, box; or log entry, day,
-box) and compares each
+container edges (at most three hops: task, project, box; log entry, day,
+box; or responsibility, role, box) and compares each
 parent's jid with the caller's root. `Root` is not a runtime name in
 `models.jac`, so nothing there may `isinstance(x, Root)`. That gate is also why
 the webhook receiver cannot apply a delivery itself: it queues, the tenant
@@ -531,6 +555,13 @@ File-based routing with route groups:
 - **`/workspace` is every setting**: Organization, People, Projects, Roles,
   GitHub and Preferences (the theme) as `?tab=` sections from
   `components/workspace/`.
+  Organization also holds the AI switch (`AiSwitch`, `SetAiEnabled`) and the
+  notice of what turning it on sends; the page reads it with
+  `ListResponsibilities` beside the workspace (only this page shows it).
+  The Roles tab lists a managed role's AI responsibilities under its row
+  (`components/workspace/roles/`: a line each with its own switch, add
+  buttons from `AI_RESPONSIBILITIES`, and the editor dialog); a free-text
+  role has no `Role` node, so it gets none until it is added as a role.
   The page loads one `GetWorkspace` and hands the Projects and Roles
   sections their lists as props (open counts are the projects' own
   tallies), so a tab switch is a render, not a request; a section's write
@@ -683,17 +714,30 @@ File-based routing with route groups:
 
 ### Deploy sizing
 
-The app stays declared as `[project] kind/entry-point`, and the app pod is
-sized in `[scale.kubernetes]` (`cpu_request`, `cpu_limit`, `memory_request`,
-`memory_limit` are all honoured there; the gateway pod is sized in
-`[scale.gateway]`). **Do not move it to `[apps.flowline]`.** On jac 0.37.7 an
-`[apps]` table makes `jac scale deploy` skip the client bundle build (the
-dry run's third line says "The served app has no client target"), so the
-pods come up API-only and `/` is a JSON 404 while `jac run` still serves
-the app locally (this took flowline-dev down on 2026-09-08, PR #176). That
-table is also the only home of `workers = "auto"`, so the worker count is
-fixed instead: `[serve.workers] count = "2"` becomes `JAC_SERVE_WORKERS=2`
-on the app pod (and on the gateway pod, which has no override of its own);
+Two apps: `[apps.flowline]` (`kind = "web-app"`, `entry-point = "main"`) and
+`[apps.pr_review]` (`kind = "service"`, `entry-point = "review.service"`), so
+a deploy runs three Deployments (gateway, `flowline`, `pr-review`); an
+`[apps]` table forbids `kind`/`entry-point` under `[project]`. The web app
+pod is sized in `[scale.kubernetes]` (`cpu_request`, `cpu_limit`,
+`memory_request`, `memory_limit`), the gateway in `[scale.gateway]`, the
+review pod in `[apps.pr_review.scale]` (with `rpc_timeout = 300`: a bridged
+call's default 10 s would cut every review short). On jac 0.37.7 an `[apps]`
+table made the deploy skip the client bundle (flowline-dev went API-only on
+2026-09-08, PR #176); 0.37.11+ builds it, and the deploy gate checks the dry
+run says so. Locally a plain `jac run` loads the review service into the web
+app's process; `jac run flowline --fleet` runs it apart, logging to
+`.jac/logs/<app>.log`. The web app reaches it through `def:protect`
+functions it awaits (a bridged walker's reports join the caller's when
+colocated, so functions, not walkers); a call with no user behind it carries
+`JAC_BRIDGE_TOKEN` and runs as `__bridge__`, which owns no workspace, so the
+service never reads or writes a tenant graph. **The token is a pod's start
+-time env**: `[scale.secrets]` declares it, it must be set before the deploy
+that ships the service, and a change needs a deploy of new source (a redeploy
+of unchanged source keeps the pods; jachammer test project, 2026-10-14). The
+outbox (un-awaited cross-app spawns) is not used: with more than one worker
+process it never delivers (jaseci-labs/jac#9881). The worker count is fixed:
+`[serve.workers] count = "2"` becomes `JAC_SERVE_WORKERS=2`
+on every pod (the gateway and the review pod have no override of their own);
 keep it equal to the cores in `cpu_limit` (#140). Never write `"auto"`
 there: the manifest builder resolves it on the deploying machine, not in
 the pod (this Mac renders 10). The HPA scales on memory too (80% of the
@@ -710,7 +754,7 @@ once `bundle_storage_class` is set to any name (a placeholder for the RWX
 check that a real deploy satisfies on the platform); `tests/smoke/
 deploy_gate.py` asserts its transcript in CI.
 
-**`[project] entry-point` is the dotted module name, `main`.** jac 0.37.12+
+**`[apps.flowline] entry-point` is the dotted module name, `main`.** jac 0.37.12+
 refuses `"main.jac"` on load. The jachammer deploy manager used to check the
 key as a file path, so between the pin bump and the platform's 2026-09-14
 release the line had to be omitted entirely (jaseci-labs/jacBuilder#1806,
@@ -865,6 +909,12 @@ fixed by its #1808); the platform now resolves either spelling to the file.
   trigger and no muted styling. Seed `""` for "nothing picked" (project on
   the task sheet and the repo picker); keep a sentinel only where an item
   carries it (the reviewer's "No reviewer").
+- **Put a `by llm()` function's rules in the function's own `sem`.** A
+  field-level `sem` (`sem Finding.severity = ...`) shaped the answer when
+  `review/engine.jac` ran on its own, but not once the same module ran as part
+  of the `pr_review` service app: the model ignored the severity definitions
+  until they moved into `sem review_file`. Keep field `sem`s too; they cost
+  nothing.
 - Client-side: `is None` misses `undefined`; `params["id"]`, never `.get()`;
   rebind state rather than mutating.
 

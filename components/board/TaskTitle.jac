@@ -1,8 +1,9 @@
 """A board row's title block: the step-coloured bullet, the title with its
-category and a Blocked pill, and the red reason line under it when the task
+category, a Blocked pill and the AI chip, and the red reason line under it when the task
 is blocked or late."""
 
 import from ...models { TaskRow }
+import from .AiChip { AiChip }
 
 def:pub TaskTitle(task: TaskRow, dot: str, alert: str) -> JsxElement {
     blocked = task.status == "Blocked";
@@ -37,6 +38,9 @@ def:pub TaskTitle(task: TaskRow, dot: str, alert: str) -> JsxElement {
                         >
                             Blocked
                         </span>
+                    }}
+                    {if task.ai_state {
+                        <AiChip key="ai" state={task.ai_state}/>
                     }}
                 </div>
                 {if alert {
