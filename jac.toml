@@ -1,6 +1,6 @@
 [project]
 name = "flowline"
-jac-version = "==0.37.23"
+jac-version = "==0.38.1"
 default-app = "flowline"
 
 # Two apps, so a deploy runs two Deployments behind one gateway. An [apps]
@@ -34,7 +34,7 @@ radius = "default"
 menuAccent = "subtle"
 menuColor = "default"
 
-[dependencies]
+[dependencies.pypi]
 prometheus_client = "*"
 requests = "*"
 pyjwt = "*"
