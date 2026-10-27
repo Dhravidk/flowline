@@ -68,7 +68,7 @@ def act(page, fn, tries: int = 3):
 
 def run(page, tag: str) -> list[str]:
     email = f"ui-{tag}@flowline-ci.invalid"
-    password = f"Ui-{tag}-Xy7!"
+    password = f"Pw-{tag}-Xy7!"
     title = f"UI task {tag}"
 
     step("sign up")

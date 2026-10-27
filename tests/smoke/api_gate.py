@@ -611,7 +611,7 @@ def history_store_suite(project_id, member_id):
 
 def sign_up(tag):
     # A second account for the tenant checks: its token, or "" on failure.
-    email, password = f"ci-{tag}@flowline-ci.invalid", f"Ci-{tag}-Xy7!"
+    email, password = f"ci-{tag}@flowline-ci.invalid", f"Pw-{tag}-Xy7!"
     req("POST", "/user/register", {"identities": [{"type": "email", "value": email}],
                                    "credential": {"type": "password", "password": password},
                                    "profile": {"org_name": "CI Other"}})
@@ -856,7 +856,7 @@ def main() -> int:
 
     tag = uuid.uuid4().hex[:10]
     email = f"ci-{tag}@flowline-ci.invalid"
-    password = f"Ci-{tag}-Xy7!"
+    password = f"Pw-{tag}-Xy7!"
     status, _, raw = req("POST", "/user/register", {
         "identities": [{"type": "email", "value": email}],
         "credential": {"type": "password", "password": password},

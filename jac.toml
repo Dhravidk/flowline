@@ -1,6 +1,6 @@
 [project]
 name = "flowline"
-jac-version = "==0.37.23"
+jac-version = "==0.38.2"
 default-app = "flowline"
 
 # Two apps, so a deploy runs two Deployments behind one gateway. An [apps]
@@ -34,7 +34,7 @@ radius = "default"
 menuAccent = "subtle"
 menuColor = "default"
 
-[dependencies]
+[dependencies.pypi]
 prometheus_client = "*"
 requests = "*"
 pyjwt = "*"
@@ -198,6 +198,8 @@ default = "server"
 # The whole module: rememberWorkspace/forgetWorkspace have no browser
 # evidence, and a server def:pub here would shadow the effects table.
 "lib.workspace" = "client"
+# Theme choices and the stored preference: browser-only, no evidence of its own.
+"lib.theme" = "client"
 models = "server"
 "services.agents.agents" = "server"
 "services.agents.runs" = "server"
