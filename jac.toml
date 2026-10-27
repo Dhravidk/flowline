@@ -198,6 +198,8 @@ default = "server"
 # The whole module: rememberWorkspace/forgetWorkspace have no browser
 # evidence, and a server def:pub here would shadow the effects table.
 "lib.workspace" = "client"
+# Theme choices and the stored preference: browser-only, no evidence of its own.
+"lib.theme" = "client"
 models = "server"
 "services.agents.agents" = "server"
 "services.agents.runs" = "server"
