@@ -4,11 +4,13 @@ Usage: flow_canvas_gate.py [base_url]
 """
 import math
 import sys
+import traceback
 import uuid
 
 from playwright.sync_api import expect, sync_playwright
 
 from browser_gate import BASE, STEP_TIMEOUT_MS, act, settle, step
+from flow_motion_cases import run_motion_checks
 
 
 def report(page, name: str, body: dict) -> object:
@@ -103,8 +105,10 @@ def main() -> int:
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             run(page)
+            run_motion_checks(page, report)
             assert not errors, errors
         except Exception as exc:
+            traceback.print_exc()
             page.screenshot(path="browser_gate_failure.png", full_page=True)
             print(f"flow canvas gate: FAIL {exc}", flush=True)
             print(f"url at failure: {page.url}", flush=True)
