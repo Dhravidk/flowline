@@ -1,7 +1,7 @@
 """Implementations for the Flow line page. Loaders and mutations reload through
 GetFlowLine rather than patching local state: the walker is the only place the
-prev/next truth lives. Zoom and pan go through zoomTo/applyPan, which keep a
-piece of the drawing in view whatever the gesture."""
+prev/next truth lives. The flow canvas pans freely; the lane view keeps its
+label gutter and bands bounded. Position saves preserve newer drag drafts."""
 
 impl FlowLinePage.boot -> None {
     startPid = currentProject();
@@ -44,14 +44,22 @@ impl FlowLinePage.loadShared -> None {
     }
 }
 
-impl FlowLinePage.reload(pid: str) -> None {
+impl FlowLinePage.reload(pid: str, moveVersion: int = -1) -> None {
     try {
         result = root spawn GetFlowLine(project_id=pid);
         fresh: list[StepView] = result.reports[0] if result.reports else [];
+        if moveVersion >= 0
+            and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
+            return;
+        }
         steps = fresh;
         loadTitles(fresh);
         failed = False;
     } except Exception as e {
+        if moveVersion >= 0
+            and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
+            return;
+        }
         # With a line on screen a toast is enough; with nothing, the page
         # shows its own failed card and retry.
         failed = True;
@@ -1004,13 +1012,12 @@ impl FlowLinePage.contentBox(z: float) -> list[float] {
 }
 
 impl FlowLinePage.applyPan(x: float, y: float) -> None {
-    # Pan only as far as there is drawing to see. On an axis where the whole
-    # drawing fits, it stays where the fit puts it (centred, or the lanes at
-    # their origin); where it overflows, its far edges stop at the frame.
+    # Flow is a free canvas, even when the drawing fits. Only the projected
+    # lane view keeps its bands within their frame and label gutter.
     view: any = viewportRef.current;
     nx = x;
     ny = y;
-    if view {
+    if view and lineView == "lanes" and not editing {
         z = float(zoomRef.current) if zoomRef.current else zoom;
         lanes = lineView == "lanes" and not editing;
         box = contentBox(z);
@@ -1166,7 +1173,7 @@ impl FlowLinePage.measureBox -> None {
     if h != boxH {
         boxH = h;
     }
-    # A new frame size moves the bounds: keep the pan inside them.
+    # A new lane frame size moves its bounds; flow mode retains its pan.
     if resized and fittedRef.current {
         panNow: list[float] = panRef.current or [panX, panY];
         applyPan(panNow[0], panNow[1]);
@@ -1253,13 +1260,19 @@ impl FlowLinePage.fitZoom -> None {
         }
         # A card grows past its base width to fit its badge and owner, which
         # the span above cannot see, so shrink until the drawn box fits.
-        for _ in range(3) {
+        for _ in range(12) {
             drawn = contentBox(best);
             overW = (drawn[2] - drawn[0]) / (w - 48.0 - mL - mR);
             overH = (drawn[3] - drawn[1]) / (h - 48.0 - mT - mB);
             over = overW if overW > overH else overH;
             if over > 1.0 {
-                best = clampZoom(best / over);
+                smaller = clampZoom(best / over);
+                if smaller >= best {
+                    break;
+                }
+                best = smaller;
+            } else {
+                break;
             }
         }
         zoomRef.current = best;
@@ -1478,7 +1491,7 @@ impl FlowLinePage.beginDrag(e: any) -> None {
             return;
         }
         pos = surfaceXY(e);
-        hit = hitRect(stepsRef.current or [], drawnRects(), pos[0], pos[1]);
+        hit = hitRect(stepsRef.current or [], drawnRects(), pos[0], pos[1], selectedId);
         if "id" in hit {
             e.preventDefault();
             found = [
@@ -1578,7 +1591,9 @@ impl FlowLinePage.moveDrag(e: any) -> None {
             surface.style.cursor = "crosshair";
         } else {
             probe = surfaceXY(e);
-            over = hitRect(stepsRef.current or [], drawnRects(), probe[0], probe[1]);
+            over = hitRect(
+                stepsRef.current or [], drawnRects(), probe[0], probe[1], selectedId
+            );
             if "id" in over {
                 surface.style.cursor = "crosshair" if over["onEdge"] else "grab";
             } else {
@@ -1594,8 +1609,13 @@ impl FlowLinePage.moveDrag(e: any) -> None {
     # either direction, so preserve signed canvas coordinates.
     nx = drag["x"] + (pos[0] - drag["px"]);
     ny = drag["y"] + (pos[1] - drag["py"]);
+    nx = clampCoord(float(nx));
+    ny = clampCoord(float(ny));
     if not drag["moved"] and (abs(nx - drag["x"]) > 3.0 or abs(ny - drag["y"]) > 3.0) {
         drag["moved"] = True;
+        version = int(moveVersionRef.current or 0) + 1;
+        moveVersionRef.current = version;
+        drag["version"] = version;
         dragId = drag["id"];
         try {
             surface.setPointerCapture(e.pointerId);
@@ -1643,7 +1663,7 @@ impl FlowLinePage.endDrag(e: any) -> None {
     if wiring {
         wireRef.current = None;
         pos = surfaceXY(e);
-        hit = hitRect(stepsRef.current or [], drawnRects(), pos[0], pos[1]);
+        hit = hitRect(stepsRef.current or [], drawnRects(), pos[0], pos[1], selectedId);
         landed = str(hit["id"]) if "id" in hit else "";
         swallowRef.current = new(Date).getTime();
         if not landed or landed == wiring {
@@ -1661,18 +1681,52 @@ impl FlowLinePage.endDrag(e: any) -> None {
     dragRef.current = None;
     dragId = "";
     if not drag["moved"] {
-        live = {};
+        # A click must not discard a previous drag's pending save.
+        updated = {** live};
+        updated[drag["id"]] = [float(drag["x"]), float(drag["y"])];
+        live = updated;
         return;
     }
     swallowRef.current = new(Date).getTime();
-    nx = float(drag["lx"]);
-    ny = float(drag["ly"]);
-    try {
-        root spawn MoveStep(step_id=drag["id"], x=nx, y=ny);
-        forgetWorkspace();
-        await reload(projectId);
-    } except Exception as err {
-        toast.error("Failed to save the position");
+    queued = (moveQueueRef.current or []) as list[dict[str, any]];
+    move = drag as dict[str, any];
+    moveQueueRef.current = queued + [move];
+    await saveMoves();
+}
+
+impl FlowLinePage.saveMoves -> None {
+    if moveSavingRef.current {
+        return;
     }
-    live = {};
+    moveSavingRef.current = True;
+    try {
+        while True {
+            queued = (moveQueueRef.current or []) as list[dict[str, any]];
+            if len(queued) == 0 {
+                break;
+            }
+            move = queued[0];
+            moveQueueRef.current = queued[1:];
+            version = int(move["version"]);
+            try {
+                root spawn MoveStep(
+                    step_id=str(move["id"]), x=float(move["lx"]), y=float(move["ly"])
+                );
+                forgetWorkspace();
+            } except Exception as err {
+                toast.error("Failed to save the position");
+            }
+            if version == int(moveVersionRef.current or 0) and not dragRef.current {
+                pid = projectId;
+                await reload(pid, version);
+                if version == int(moveVersionRef.current or 0)
+                    and not dragRef.current
+                    and pid == projectId {
+                    live = {};
+                }
+            }
+        }
+    } finally {
+        moveSavingRef.current = False;
+    }
 }

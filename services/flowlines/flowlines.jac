@@ -5,6 +5,7 @@ step and works there; the traversal from the caller's root is the isolation.
 NO cycle guard: loops are the point; only self-loops are refused.
 """
 
+import math;
 import from jaclang.lib.effects { effects }
 import from models {
     WorkflowStep,
@@ -39,6 +40,7 @@ import from services.util {
     ensure_arrows
 }
 import from constants {
+    FLOW_COORD_LIMIT,
     STEP_KINDS,
     KIND_COLORS,
     KIND_STATUS,
@@ -95,18 +97,19 @@ def landing_step(t: Task, known: list[str], first_of_kind: dict[str, str]) -> st
 }
 
 
-# Canvas bound in px on either side of the origin. Positions come straight
-# off the wire: NaN and ±Infinity fail the range test and land at the origin.
-# A stored inf would serialize as the bare token `Infinity`, which JSON.parse
-# rejects on every later read.
-glob MAX_COORD: float = 20000.0;
-
-
+# Keep finite positions at the nearest canvas boundary. Invalid floats still
+# fall back to the origin so every later response remains JSON-encodable.
 def safe_coord(v: float) -> float {
-    if v >= -MAX_COORD and v <= MAX_COORD {
-        return v;
+    if not math.isfinite(v) {
+        return 0.0;
     }
-    return 0.0;
+    if v < -FLOW_COORD_LIMIT {
+        return -FLOW_COORD_LIMIT;
+    }
+    if v > FLOW_COORD_LIMIT {
+        return FLOW_COORD_LIMIT;
+    }
+    return v;
 }
 
 

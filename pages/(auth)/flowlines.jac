@@ -46,6 +46,7 @@ import from ...components.flowlines.geometry {
     nodeRects,
     stepXY,
     clampZoom,
+    clampCoord,
     nextStop,
     detailOf,
     NODE_W,
@@ -202,6 +203,10 @@ def:pub FlowLinePage -> JsxPage {
         panRef: Ref[any] = Ref(),
         fittedRef: Ref[any] = Ref(),
         dragRef: Ref[any] = Ref(),
+        # Position writes run in order; a new drag invalidates older reads.
+        moveVersionRef: Ref[any] = Ref(),
+        moveQueueRef: Ref[any] = Ref(),
+        moveSavingRef: Ref[any] = Ref(),
         wireRef: Ref[any] = Ref(),
         gestureRef: Ref[any] = Ref(),
         pointersRef: Ref[any] = Ref(),
@@ -321,7 +326,7 @@ def:pub FlowLinePage -> JsxPage {
 
     async def boot -> None;
     async def loadShared -> None;
-    async def reload(pid: str) -> None;
+    async def reload(pid: str, moveVersion: int = -1) -> None;
     async def retryLoad -> None;
     async def adoptProject(v: str) -> None;
     async def peekStep(stepId: str) -> None;
@@ -384,6 +389,7 @@ def:pub FlowLinePage -> JsxPage {
     def beginDrag(e: any) -> None;
     def moveDrag(e: any) -> None;
     async def endDrag(e: any) -> None;
+    async def saveMoves -> None;
 
     peekRef.current = peekId;
     stepsRef.current = steps;

@@ -89,9 +89,9 @@ def run(page) -> None:
     assert (probe["x"], probe["y"]) == (-20000.0, 20000.0), probe
     probe = report(page, "MoveStep", {"step_id": probe["id"], "x": 20000.0, "y": -20000.0})
     assert (probe["x"], probe["y"]) == (20000.0, -20000.0), probe
-    step("custom flow: out-of-range coordinates still reset safely")
+    step("custom flow: out-of-range coordinates stop at the nearest boundary")
     probe = report(page, "MoveStep", {"step_id": probe["id"], "x": -20001.0, "y": 20001.0})
-    assert (probe["x"], probe["y"]) == (0.0, 0.0), probe
+    assert (probe["x"], probe["y"]) == (-20000.0, 20000.0), probe
 
 
 def main() -> int:
