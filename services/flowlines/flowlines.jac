@@ -95,15 +95,15 @@ def landing_step(t: Task, known: list[str], first_of_kind: dict[str, str]) -> st
 }
 
 
-# Canvas bound in px. Positions come straight off the wire, so this is what
-# keeps a crafted request from breaking the workspace: NaN and ±Infinity fail
-# the range test and land at the origin (a stored inf would serialize as the
-# bare token `Infinity`, which JSON.parse rejects on every later read).
+# Canvas bound in px on either side of the origin. Positions come straight
+# off the wire: NaN and ±Infinity fail the range test and land at the origin.
+# A stored inf would serialize as the bare token `Infinity`, which JSON.parse
+# rejects on every later read.
 glob MAX_COORD: float = 20000.0;
 
 
 def safe_coord(v: float) -> float {
-    if v >= 0.0 and v <= MAX_COORD {
+    if v >= -MAX_COORD and v <= MAX_COORD {
         return v;
     }
     return 0.0;

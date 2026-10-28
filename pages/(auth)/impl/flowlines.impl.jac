@@ -1590,14 +1590,10 @@ impl FlowLinePage.moveDrag(e: any) -> None {
         return;
     }
     pos = pointerXY(e);
+    # The canvas origin moves with the fitted pan; steps can cross it in
+    # either direction, so preserve signed canvas coordinates.
     nx = drag["x"] + (pos[0] - drag["px"]);
     ny = drag["y"] + (pos[1] - drag["py"]);
-    if nx < 0.0 {
-        nx = 0.0;
-    }
-    if ny < 0.0 {
-        ny = 0.0;
-    }
     if not drag["moved"] and (abs(nx - drag["x"]) > 3.0 or abs(ny - drag["y"]) > 3.0) {
         drag["moved"] = True;
         dragId = drag["id"];
