@@ -161,7 +161,7 @@ def:pub FlowLinePage -> JsxPage {
         # Add step opens a naming panel first: the step only exists once the
         # user has called it something, never as a placeholder card.
         creatingStep: bool = False,
-        # A dragged step's live position, canvas px, for this drag only.
+        # Canvas positions awaiting a save refresh, plus the active drag draft.
         live: dict[str, list[float]] = {},
         dragId: str = "",
         # Clicking a step outside edit mode opens its work.
@@ -207,8 +207,11 @@ def:pub FlowLinePage -> JsxPage {
         moveVersionRef: Ref[any] = Ref(),
         moveQueueRef: Ref[any] = Ref(),
         moveSavingRef: Ref[any] = Ref(),
+        movePendingRef: Ref[any] = Ref(),
         wireRef: Ref[any] = Ref(),
         gestureRef: Ref[any] = Ref(),
+        activePointerRef: Ref[any] = Ref(),
+        # Only pressed touch contacts participate in a pinch.
         pointersRef: Ref[any] = Ref(),
         spaceRef: Ref[any] = Ref(),
         swallowRef: Ref[any] = Ref(),
@@ -326,7 +329,7 @@ def:pub FlowLinePage -> JsxPage {
 
     async def boot -> None;
     async def loadShared -> None;
-    async def reload(pid: str, moveVersion: int = -1) -> None;
+    async def reload(pid: str, moveVersion: int = -1) -> bool;
     async def retryLoad -> None;
     async def adoptProject(v: str) -> None;
     async def peekStep(stepId: str) -> None;
@@ -388,7 +391,10 @@ def:pub FlowLinePage -> JsxPage {
     def surfaceXY(e: any) -> list[float];
     def beginDrag(e: any) -> None;
     def moveDrag(e: any) -> None;
+    def discardDrag -> None;
     async def endDrag(e: any) -> None;
+    async def cancelDrag(e: any) -> None;
+    async def finishPointer(e: any, canceled: bool) -> None;
     async def saveMoves -> None;
 
     peekRef.current = peekId;
@@ -912,7 +918,7 @@ def:pub FlowLinePage -> JsxPage {
                                             onPointerDown={beginDrag}
                                             onPointerMove={moveDrag}
                                             onPointerUp={endDrag}
-                                            onPointerCancel={endDrag}
+                                            onPointerCancel={cancelDrag}
                                         >
                                             <FlowCanvas
                                                 steps={steps}

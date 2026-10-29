@@ -44,21 +44,23 @@ impl FlowLinePage.loadShared -> None {
     }
 }
 
-impl FlowLinePage.reload(pid: str, moveVersion: int = -1) -> None {
+impl FlowLinePage.reload(pid: str, moveVersion: int = -1) -> bool {
+    loaded = False;
     try {
         result = root spawn GetFlowLine(project_id=pid);
         fresh: list[StepView] = result.reports[0] if result.reports else [];
         if moveVersion >= 0
             and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
-            return;
+            return False;
         }
         steps = fresh;
         loadTitles(fresh);
         failed = False;
+        loaded = True;
     } except Exception as e {
         if moveVersion >= 0
             and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
-            return;
+            return False;
         }
         # With a line on screen a toast is enough; with nothing, the page
         # shows its own failed card and retry.
@@ -68,6 +70,7 @@ impl FlowLinePage.reload(pid: str, moveVersion: int = -1) -> None {
         }
     }
     loading = False;
+    return loaded;
 }
 
 # Everything again, projects and roster included: the first read failed
@@ -1449,12 +1452,10 @@ impl FlowLinePage.beginDrag(e: any) -> None {
     if e.pointerType == "mouse" and e.button != 0 and e.button != 1 {
         return;
     }
-    pts: list[list[float]] = trackPointer(
-        pointersRef.current or [],
-        float(e.pointerId),
-        float(e.clientX),
-        float(e.clientY)
-    );
+    pts: list[list[float]] = pointersRef.current or [];
+    if e.pointerType == "touch" {
+        pts = trackPointer(pts, float(e.pointerId), float(e.clientX), float(e.clientY));
+    }
     pointersRef.current = pts;
     pan: list[float] = panRef.current or [panX, panY];
     if len(pts) >= 2 {
@@ -1462,17 +1463,21 @@ impl FlowLinePage.beginDrag(e: any) -> None {
         a = pts[0];
         b = pts[1];
         d = ((a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])) ** 0.5;
-        dragRef.current = None;
+        discardDrag();
+        activePointerRef.current = None;
+        if wireRef.current {
+            connectFrom = "";
+        }
         wireRef.current = None;
-        live = {};
-        dragId = "";
         gestureRef.current = {
             "kind": "pinch",
             "d0": d if d > 1.0 else 1.0,
             "z0": float(zoomRef.current) if zoomRef.current else zoom
         };
+        saveMoves();
         return;
     }
+    activePointerRef.current = e.pointerId;
     panStart: dict[str, any] = {
         "kind": "pan",
         "x0": float(e.clientX),
@@ -1542,16 +1547,25 @@ impl FlowLinePage.beginDrag(e: any) -> None {
 }
 
 impl FlowLinePage.moveDrag(e: any) -> None {
-    pts: list[list[float]] = trackPointer(
-        pointersRef.current or [],
-        float(e.pointerId),
-        float(e.clientX),
-        float(e.clientY)
-    );
+    pts: list[list[float]] = pointersRef.current or [];
+    # Hover updates the cursor, but never creates a contact or drives a drag.
+    if len(
+        [
+            p
+            for p in pts
+            if p[0] == float(e.pointerId)
+        ]
+    )
+        > 0 {
+        pts = trackPointer(pts, float(e.pointerId), float(e.clientX), float(e.clientY));
+    }
     pointersRef.current = pts;
     surface: any = e.currentTarget;
     g: any = gestureRef.current;
-    if g and g["kind"] == "pinch" and len(pts) >= 2 {
+    if g and g["kind"] == "pinch" {
+        if e.pointerType != "touch" or len(pts) < 2 {
+            return;
+        }
         a = pts[0];
         b = pts[1];
         d = ((a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])) ** 0.5;
@@ -1563,7 +1577,8 @@ impl FlowLinePage.moveDrag(e: any) -> None {
         );
         return;
     }
-    if g and g["kind"] == "pan" {
+    active = activePointerRef.current == e.pointerId;
+    if g and g["kind"] == "pan" and active {
         dx = float(e.clientX) - float(g["x0"]);
         dy = float(e.clientY) - float(g["y0"]);
         if not g["moved"] {
@@ -1601,7 +1616,7 @@ impl FlowLinePage.moveDrag(e: any) -> None {
             }
         }
     }
-    if not drag {
+    if not drag or not active {
         return;
     }
     pos = pointerXY(e);
@@ -1611,7 +1626,10 @@ impl FlowLinePage.moveDrag(e: any) -> None {
     ny = drag["y"] + (pos[1] - drag["py"]);
     nx = clampCoord(float(nx));
     ny = clampCoord(float(ny));
-    if not drag["moved"] and (abs(nx - drag["x"]) > 3.0 or abs(ny - drag["y"]) > 3.0) {
+    if not drag["moved"] {
+        if abs(nx - drag["x"]) <= 3.0 and abs(ny - drag["y"]) <= 3.0 {
+            return;
+        }
         drag["moved"] = True;
         version = int(moveVersionRef.current or 0) + 1;
         moveVersionRef.current = version;
@@ -1629,10 +1647,29 @@ impl FlowLinePage.moveDrag(e: any) -> None {
     drag["ly"] = ny;
     updated = {** live};
     updated[drag["id"]] = [nx, ny];
+    liveRef.current = updated;
     live = updated;
 }
 
+impl FlowLinePage.discardDrag -> None {
+    dragRef.current = None;
+    dragId = "";
+    # Drop only the current preview. Earlier drops may still be queued,
+    # in flight, or waiting for a fresh server read.
+    pending = (movePendingRef.current or {}) as dict[str, list[float]];
+    liveRef.current = pending;
+    live = pending;
+}
+
 impl FlowLinePage.endDrag(e: any) -> None {
+    await finishPointer(e, False);
+}
+
+impl FlowLinePage.cancelDrag(e: any) -> None {
+    await finishPointer(e, True);
+}
+
+impl FlowLinePage.finishPointer(e: any, canceled: bool) -> None {
     remaining: list[list[float]] = [];
     for p in (pointersRef.current or []) {
         if p[0] != float(e.pointerId) {
@@ -1643,11 +1680,21 @@ impl FlowLinePage.endDrag(e: any) -> None {
     surface: any = e.currentTarget;
     g: any = gestureRef.current;
     if g and g["kind"] == "pinch" {
+        if e.pointerType != "touch" {
+            return;
+        }
         if len(remaining) < 2 {
             gestureRef.current = None;
             swallowRef.current = new(Date).getTime();
         }
         return;
+    }
+    if activePointerRef.current != e.pointerId {
+        return;
+    }
+    activePointerRef.current = None;
+    if surface {
+        surface.style.cursor = "";
     }
     if g and g["kind"] == "pan" {
         gestureRef.current = None;
@@ -1662,6 +1709,11 @@ impl FlowLinePage.endDrag(e: any) -> None {
     wiring: any = wireRef.current;
     if wiring {
         wireRef.current = None;
+        if canceled {
+            connectFrom = "";
+            swallowRef.current = new(Date).getTime();
+            return;
+        }
         pos = surfaceXY(e);
         hit = hitRect(stepsRef.current or [], drawnRects(), pos[0], pos[1], selectedId);
         landed = str(hit["id"]) if "id" in hit else "";
@@ -1678,15 +1730,20 @@ impl FlowLinePage.endDrag(e: any) -> None {
     if not drag {
         return;
     }
-    dragRef.current = None;
-    dragId = "";
-    if not drag["moved"] {
-        # A click must not discard a previous drag's pending save.
-        updated = {** live};
-        updated[drag["id"]] = [float(drag["x"]), float(drag["y"])];
-        live = updated;
+    if canceled or not drag["moved"] {
+        discardDrag();
+        if drag["moved"] {
+            swallowRef.current = new(Date).getTime();
+        }
+        # A save may have finished while this pointer was held. Reconcile
+        # that drop now, even though this gesture did not create a new one.
+        await saveMoves();
         return;
     }
+    pending = {** (movePendingRef.current or {})};
+    pending[drag["id"]] = [float(drag["lx"]), float(drag["ly"])];
+    movePendingRef.current = pending;
+    discardDrag();
     swallowRef.current = new(Date).getTime();
     queued = (moveQueueRef.current or []) as list[dict[str, any]];
     move = drag as dict[str, any];
@@ -1703,11 +1760,31 @@ impl FlowLinePage.saveMoves -> None {
         while True {
             queued = (moveQueueRef.current or []) as list[dict[str, any]];
             if len(queued) == 0 {
-                break;
+                if dragRef.current or not movePendingRef.current {
+                    break;
+                }
+                version = int(moveVersionRef.current or 0);
+                pid = projectId;
+                loaded = await reload(pid, version);
+                if version == int(moveVersionRef.current or 0)
+                    and not dragRef.current
+                    and pid == projectId {
+                    if loaded {
+                        movePendingRef.current = {};
+                        liveRef.current = {};
+                        live = {};
+                    }
+                    break;
+                }
+                if dragRef.current or pid != projectId {
+                    break;
+                }
+                # Another drop or a canceled preview invalidated the read;
+                # drain any new writes and refresh the latest version.
+                continue;
             }
             move = queued[0];
             moveQueueRef.current = queued[1:];
-            version = int(move["version"]);
             try {
                 root spawn MoveStep(
                     step_id=str(move["id"]), x=float(move["lx"]), y=float(move["ly"])
@@ -1715,15 +1792,6 @@ impl FlowLinePage.saveMoves -> None {
                 forgetWorkspace();
             } except Exception as err {
                 toast.error("Failed to save the position");
-            }
-            if version == int(moveVersionRef.current or 0) and not dragRef.current {
-                pid = projectId;
-                await reload(pid, version);
-                if version == int(moveVersionRef.current or 0)
-                    and not dragRef.current
-                    and pid == projectId {
-                    live = {};
-                }
             }
         }
     } finally {
