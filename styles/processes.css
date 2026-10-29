@@ -18,6 +18,11 @@
 .process-floating-panel {
     max-height: calc(100% - 1.5rem);
 }
+@media (min-width: 640px) and (max-width: 1023px) {
+    .process-workspace {
+        height: max(28rem, calc(100dvh - 18rem));
+    }
+}
 @media (max-width: 639px) {
     .process-workspace {
         height: max(28rem, calc(100dvh - 19rem));

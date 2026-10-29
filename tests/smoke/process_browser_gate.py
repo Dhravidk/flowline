@@ -179,6 +179,9 @@ def run():
         expect(page.locator(".process-step-list")).to_have_count(2)
         expect(page.locator('[data-canvas="flow"]')).to_have_count(0)
         layout(page)
+        footer = page.locator(".process-workspace > footer").bounding_box()
+        navigation = page.get_by_role("navigation", name="Pages", exact=True).bounding_box()
+        assert footer["y"] + footer["height"] <= navigation["y"], "Process footer sits behind the bottom navigation"
         page.screenshot(path=str(OUT / "compare-intermediate.png"), full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
         layout(page)
