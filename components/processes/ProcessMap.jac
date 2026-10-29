@@ -1,8 +1,10 @@
-"""A reusable read-only process diagram. The same definitions also render as
-an ordered step list; neither view executes the depicted business process."""
+"""Read-only storyboards on the native flow canvas. Presentation adapters
+never create operational steps, task counts or automation runs."""
 
-import from ...models { ProcessView }
 import from "react" { useEffect }
+import from ...models { ProcessView, StepView }
+import from ..flowlines.FlowCanvas { FlowCanvas }
+import from ..flowlines.StepListRow { StepListRow }
 
 def nodeById(steps: list[dict[str, str]], key: str) -> dict[str, str] {
     for s in steps {
@@ -13,183 +15,239 @@ def nodeById(steps: list[dict[str, str]], key: str) -> dict[str, str] {
     return {};
 }
 
-def routePath(a: dict[str, str], b: dict[str, str], kind: str) -> str {
-    ax = float(a["x"]) + 108.0;
-    ay = float(a["y"]) + 124.0;
-    bx = float(b["x"]) + 108.0;
-    targetY = float(b["y"]);
-    if kind == "return" {
-        ax = float(a["x"]) + 216.0;
-        ay = float(a["y"]) + 62.0;
-        bx = float(b["x"]) + 216.0;
-        targetY = float(b["y"]) + 62.0;
-        return f"M {ax} {ay} H 782 V {targetY} H {bx}";
+def processSteps(process: ProcessView) -> list[StepView] {
+    rows: list[StepView] = [];
+    for (index, item) in enumerate(process.steps) {
+        kind = "active";
+        if item["id"] == "intake" {
+            kind = "start";
+        } elif item["id"] == "production" {
+            kind = "done";
+        } elif item["id"] == "exception" {
+            kind = "blocked";
+        } elif item["id"]
+            in ["approval", "story_approval", "design_approval", "final", "uat"] {
+            kind = "handoff";
+        }
+        title = item["title"];
+        if item["status"] in ["Planned", "Placeholder"] {
+            title = item["status"] + " · " + title;
+        }
+        outgoing = [
+            t
+            for t in process.transitions
+            if t["source"] == item["id"]
+        ];
+        rows.append(
+            StepView(
+                id=item["id"],
+                name=title,
+                kind=kind,
+                color="slate",
+                x=float(item["x"]),
+                y=float(item["y"]),
+                sort_order=float(index),
+                owner=item["owner"],
+                blurb=item["status"],
+                next_ids=[t["target"] for t in outgoing],
+                next_labels=[t["label"] for t in outgoing]
+            )
+        );
     }
-    mid = (ay + targetY) / 2.0;
-    return f"M {ax} {ay} C {ax} {mid}, {bx} {mid}, {bx} {targetY}";
+    return rows;
 }
 
 def:pub ProcessMap(
     process: ProcessView,
     selectedId: str,
     onSelect: Callable[[str], None],
-    listView: bool = False
+    listView: bool = False,
+    zoom: float = 0.75,
+    fitTick: int = 0,
+    focusTick: int = 0,
+    focusId: str = "",
+    onZoom: Callable[[float], None] = None,
+    onFit: Callable[[], None] = None
 ) -> JsxElement {
     has viewport: Ref[any] = Ref(),
-        scale: float = 1.0;
+        layout: Ref[any] = Ref(),
+        drag: Ref[any] = Ref(),
+        pose: Ref[any] = Ref(),
+        previousZoom: Ref[float] = Ref(zoom),
+        panX: float = 0.0,
+        panY: float = 24.0,
+        width: float = 800.0,
+        height: float = 600.0;
+
+    pose.current = {"x": panX, "y": panY, "zoom": zoom};
 
     useEffect(
         lambda {
-            box = viewport.current;
-            chosen = nodeById(process.steps, selectedId);
-            if box and chosen and not listView {
-                box.scrollTop = max(
-                    0.0,
-                    float(chosen["y"]) * scale - (float(box.clientHeight) / 2.0)
-                        + 62.0 * scale
-                );
-                box.scrollLeft = max(
-                    0.0,
-                    (float(chosen["x"]) + 108.0) * scale - float(box.clientWidth) / 2.0
-                );
+            el = viewport.current;
+            if not el or listView {
+                return;
             }
+            w: any = window;
+            observer = new(
+                w.ResizeObserver,
+                lambda {
+                    width = float(el.clientWidth);
+                    height = float(el.clientHeight);
+                }
+            );
+            observer.observe(el);
+            return lambda { observer.disconnect(); };
         },
-        [selectedId, process.id, listView, scale]
+        [listView]
     );
 
-    height = 200.0;
-    for s in process.steps {
-        height = max(height, float(s["y"]) + 160.0);
+    useEffect(
+        lambda {
+            prior = previousZoom.current;
+            if prior > 0.0 and prior != zoom {
+                ratio = zoom / prior;
+                panX = width / 2.0 + (panX - width / 2.0) * ratio;
+                panY = height / 2.0 + (panY - height / 2.0) * ratio;
+            }
+            previousZoom.current = zoom;
+        },
+        [zoom]
+    );
+
+    useEffect(
+        lambda { if layout.current and not listView {
+            bounds = layout.current["nodes"];
+            panX = width / 2.0 - (float(bounds[0]) + float(bounds[2])) / 2.0;
+            panY = 24.0 - float(bounds[1]);
+        }},
+        [process.id, fitTick, width, listView]
+    );
+
+    useEffect(
+        lambda { if focusTick > 0 and focusId and layout.current and not listView {
+            rects = layout.current["rects"];
+            if focusId in rects {
+                r = rects[focusId];
+                panX = width / 2.0 - float(r[0]) - float(r[2]) / 2.0;
+                panY = height / 2.0 - float(r[1]) - float(r[3]) / 2.0;
+            }
+        }},
+        [focusTick, process.id, listView]
+    );
+
+    useEffect(
+        lambda {
+            el = viewport.current;
+            if not el or listView {
+                return;
+            }
+            handler = lambda (e: any) {
+                e.preventDefault();
+                if e.ctrlKey or e.metaKey {
+                    if onZoom {
+                        onZoom(
+                            float(pose.current["zoom"]) * (0.9 if e.deltaY > 0 else 1.1)
+                        );
+                    }
+                } else {
+                    panX = float(pose.current["x"]) - float(e.deltaX);
+                    panY = float(pose.current["y"]) - float(e.deltaY);
+                    pose.current = {"x": panX, "y": panY, "zoom": zoom};
+                }
+            };
+            el.addEventListener("wheel", handler, {"passive": False});
+            return lambda { el.removeEventListener("wheel", handler); };
+        },
+        [zoom, listView]
+    );
+
+    def pointerDown(e: PointerEvent) {
+        target: any = e.target;
+        el = viewport.current;
+        if not el or e.button != 0 or target.closest("button") {
+            return;
+        }
+        drag.current = {"x": e.clientX, "y": e.clientY, "panX": panX, "panY": panY};
+        el.setPointerCapture(e.pointerId);
     }
-    marker = "arrow-" + process.template_key;
+
+    def pointerMove(e: PointerEvent) {
+        if drag.current {
+            panX = float(drag.current["panX"]) + float(e.clientX)
+                - float(drag.current["x"]);
+            panY = float(drag.current["panY"]) + float(e.clientY)
+                - float(drag.current["y"]);
+        }
+    }
+
+    def keyDown(e: KeyboardEvent) {
+        if e.target != e.currentTarget {
+            return;
+        }
+        if e.key in ["f", "F"] and onFit {
+            e.preventDefault();
+            onFit();
+        } elif e.key in ["+", "="] and onZoom {
+            e.preventDefault();
+            onZoom(zoom * 1.2);
+        } elif e.key == "-" and onZoom {
+            e.preventDefault();
+            onZoom(zoom / 1.2);
+        } elif e.key in ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] {
+            e.preventDefault();
+            if e.key == "ArrowUp" {
+                panY = panY + 80.0;
+            } elif e.key == "ArrowDown" {
+                panY = panY - 80.0;
+            } elif e.key == "ArrowLeft" {
+                panX = panX + 80.0;
+            } else {
+                panX = panX - 80.0;
+            }
+        }
+    }
+
+    rows = processSteps(process);
     if listView {
         return
-            <ol className="process-step-list" aria-label={process.title + " steps"}>
-                {for (i, s) in enumerate(process.steps) {
-                    <li key={s["id"]}>
-                        <button
-                            type="button"
-                            className={"process-list-node "
-                                + ("is-selected" if selectedId == s["id"] else "")}
-                            aria-pressed={selectedId == s["id"]}
-                            onClick={lambda { onSelect(s["id"]); }}
-                        >
-                            <span className="process-number">{i + 1}</span>
-                            <span className="process-list-copy">
-                                <strong>{s["title"]}</strong>
-                                <span>{s["owner"]}</span>
-                            </span>
-                            <span
-                                className={"process-status status-"
-                                    + s["status"].lower()}
-                            >
-                                {s["status"]}
-                            </span>
-                        </button>
-                    </li>
+            <ol
+                className="process-step-list flex min-h-0 flex-col gap-1 overflow-y-auto p-2"
+                aria-label={process.title + " steps"}
+            >
+                {for row in rows {
+                    <StepListRow
+                        key={row.id}
+                        step={row}
+                        outs={[]}
+                        selected={selectedId == row.id}
+                        showCounts={False}
+                        onOpen={onSelect}
+                    />
                 }}
             </ol>;
     }
     return
-        <div>
-            <div className="process-zoom-controls" aria-label="Diagram scale">
-                {for amount in [0.5, 0.75, 1.0] {
-                    <button
-                        type="button"
-                        key={str(amount)}
-                        aria-pressed={scale == amount}
-                        onClick={lambda { scale = amount; }}
-                    >
-                        {str(int(amount * 100.0)) + "%"}
-                    </button>
-                }}
-                <span>Scroll to explore · select a step for details</span>
-            </div>
-            <div
-                ref={viewport}
-                className="process-map-scroll"
-                tabIndex={0}
-                aria-label={process.title + " diagram; scroll to explore"}
-            >
-                <div
-                    className="process-map"
-                    style={{"height": str(height) + "px", "zoom": str(scale)}}
-                >
-                    <svg
-                        width="800"
-                        height={height}
-                        className="process-connectors"
-                        aria-hidden={True}
-                    >
-                        <defs>
-                            <marker
-                                id={marker}
-                                markerWidth="7"
-                                markerHeight="7"
-                                refX="6"
-                                refY="3.5"
-                                orient="auto"
-                            >
-                                <path d="M0 0 L7 3.5 L0 7 Z" fill="currentColor"/>
-                            </marker>
-                        </defs>
-                        {for (i, t) in enumerate(process.transitions) {
-                            a = nodeById(process.steps, t["source"]);
-                            b = nodeById(process.steps, t["target"]);
-                            focused = selectedId == t["source"]
-                                or selectedId == t["target"];
-                            <g key={str(i)}>
-                                <path
-                                    d={routePath(a, b, t["kind"])}
-                                    className={"process-wire "
-                                        + (
-                                            "is-return "
-                                                if t["kind"] == "return"
-                                                else ""
-                                        )
-                                        + ("is-focused" if focused else "")}
-                                    markerEnd={"url(#" + marker + ")"}
-                                >
-                                    <title>{t["label"] or "Next step"}</title>
-                                </path>
-                                {if t["label"]
-                                    and t["kind"] != "return"
-                                    and float(b["y"]) > float(a["y"]) {
-                                    <text
-                                        x={(float(a["x"]) + float(b["x"])) / 2.0
-                                            + 116.0}
-                                        y={(float(a["y"]) + 124.0 + float(b["y"])) / 2.0
-                                            - 6.0}
-                                        className="process-wire-label"
-                                    >
-                                        {t["label"]}
-                                    </text>
-                                }}
-                            </g>
-                        }}
-                    </svg>
-                    {for s in process.steps {
-                        <button
-                            key={s["id"]}
-                            type="button"
-                            data-process-step={s["id"]}
-                            aria-pressed={selectedId == s["id"]}
-                            className={"process-node "
-                                + ("is-selected" if selectedId == s["id"] else "")}
-                            style={{"left": s["x"] + "px", "top": s["y"] + "px"}}
-                            onClick={lambda { onSelect(s["id"]); }}
-                        >
-                            <span
-                                className={"process-status status-"
-                                    + s["status"].lower()}
-                            >
-                                {s["status"]}
-                            </span>
-                            <strong>{s["title"]}</strong>
-                            <span className="process-node-owner">{s["owner"]}</span>
-                        </button>
-                    }}
-                </div>
-            </div>
+        <div
+            ref={viewport}
+            className="process-map relative min-h-0 flex-1 overflow-hidden outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            role="region"
+            aria-label={process.title + " diagram"}
+            tabIndex={0}
+            onPointerDown={pointerDown}
+            onPointerMove={pointerMove}
+            onPointerUp={lambda { drag.current = None; }}
+            onPointerCancel={lambda { drag.current = None; }}
+            onKeyDown={keyDown}
+        >
+            <FlowCanvas
+                steps={rows}
+                selectedId={selectedId}
+                showCounts={False}
+                zoom={zoom}
+                panX={panX}
+                panY={panY}
+                layoutRef={layout}
+                onSelect={onSelect}
+            />
         </div>;
 }

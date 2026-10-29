@@ -200,6 +200,7 @@ nav:
       - Operations: deploy/operations.md
   - Contributing:
       - Review delivery processes: contributing/process-review.md
+      - Style and UX guide: contributing/style-and-ux-guide.md
       - contributing/index.md
       - Verification and CI: contributing/verification.md
       - Jac gotchas: contributing/jac-gotchas.md

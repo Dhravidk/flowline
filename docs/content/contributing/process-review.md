@@ -13,6 +13,18 @@ jac install
 jac run --no-dev --host 127.0.0.1 -w 1 main.jac
 ```
 
+### Compiler prerequisite for this UX revision
+
+Review-note drafts exercise the bound dictionary-key fix in
+[Jac PR #10441](https://github.com/jaseci-labs/jac/pull/10441). Stock 0.38.2
+emits a variable key as its identifier spelling, so it cannot retain separate
+drafts correctly. Validate this revision with that compiler fix until a
+compatible release includes it. The local review uses a scoped copy of 0.38.2
+with the upstream fix backported; the installed compiler and project version
+pin are unchanged. No application workaround replaces the dictionary idiom.
+The extended draft regression is expected to fail on unmodified 0.38.2;
+this compiler fix is an upstream merge dependency for this revision.
+
 Open `http://localhost:8000/processes`. Sign up or sign in to a **local**
 workspace using email and password. Hosted Flowline accounts are stored on a
 different server. Google/GitHub SSO needs project credentials and is not
@@ -33,17 +45,27 @@ Direct links after installation:
 
 ## Review the process
 
-Select the family and version, or compare both versions. Click a diagram step,
-use **Jump to step**, or switch to the readable step list. The inspector shows
+Select the family and version, or choose **Compare**. Click a diagram step,
+use **Jump to step**, or choose **List**. Step details open in a contextual
+panel, or a bottom sheet on a phone. The inspector shows
 the owner, action, decision rule, inputs, outputs, dependencies and rework
 destinations. Solid lines move forward; dashed lines return for revision or
-repair. Select a step to highlight its connections. The diagram can be scrolled
-and viewed at 50%, 75% or 100%.
+repair. Select a step to highlight its connections. The diagrams use the native
+Flowline canvas: drag or scroll to pan, use the zoom controls or Ctrl/Cmd with
+the wheel to zoom, and use **Fit** to fit the diagram width. Focus the diagram
+to pan with arrow keys, zoom with +/-, or fit width with F. Comparison shares
+one zoom control. Text retains its native size at every zoom.
 
-Save feedback in **Review note**. Notes persist in the local workspace and
-survive navigation and reload. A note is not an approval or execution result.
+Narrow comparison views default to readable lists. A diagram can still be
+chosen explicitly; phone comparison lists stack the versions and scroll with
+the page.
 
-**Shared QA & rules** records the agreed testing, review, repair, timing and
+Save feedback in **Review note**. Unsaved drafts stay in the page when changing
+steps, families, versions or review sections. Save notes to keep them after a
+reload. A failed save keeps the input and offers retry. A note is not an
+approval or execution result.
+
+Under **Review options**, **Shared QA & rules** records the agreed testing, review, repair, timing and
 evidence requirements. **To configure** lists values that are deliberately
 unset. **Build stages** separates this working milestone from later operational
 contributions. The full implementation plan is in
@@ -82,6 +104,10 @@ python tests/smoke/process_browser_gate.py http://localhost:8000
 
 The API gate uses Python's standard library. The browser gate requires
 `playwright` and an installed Chrome; it creates an isolated test workspace
-and saves screenshots under `.jac/process-review/`. The tested 1440px and
-390px widths exercise this library's own UI, and do not set a project's QA
+and saves screenshots under `.jac/process-review/`. Desktop, intermediate and
+phone widths exercise this library's own UI, and do not set a project's QA
 screen matrix. Tests do not exercise any of the planned delivery automation.
+
+For UI changes, follow the [style and UX guide](style-and-ux-guide.md). This
+page reuses the native flow renderer, step rows, controls and form components;
+the storyboard adapter suppresses task counts instead of inventing work items.
