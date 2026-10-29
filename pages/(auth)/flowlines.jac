@@ -11,7 +11,6 @@ import from ...services.flowlines.flowlines {
     GetFlowLine,
     ApplyTemplate,
     SaveStep,
-    MoveStep,
     DeleteStep,
     DeleteFlowLine,
     LinkTransition,
@@ -22,6 +21,15 @@ import from ...services.flowlines.flowlines {
     ListStepTasks
 }
 import from ...lib.workspace { loadWorkspace, forgetWorkspace }
+import from ...lib.flowMoves {
+    flowMoveVersion,
+    advanceFlowMove,
+    pendingFlowMoves,
+    flowMovesBusy,
+    queueFlowMove,
+    flushFlowMoves,
+    acknowledgeFlowMoves
+}
 import from ...lib.filters { defaultProject }
 import from ...lib.project { currentProject, pickProject }
 import from ...components.flowlines.FlowCanvas { FlowCanvas }
@@ -162,7 +170,7 @@ def:pub FlowLinePage -> JsxPage {
         # user has called it something, never as a placeholder card.
         creatingStep: bool = False,
         # Canvas positions awaiting a save refresh, plus the active drag draft.
-        live: dict[str, list[float]] = {},
+        live: dict[str, list[float]] = pendingFlowMoves(),
         dragId: str = "",
         # Clicking a step outside edit mode opens its work.
         peekId: str = "",
@@ -203,11 +211,10 @@ def:pub FlowLinePage -> JsxPage {
         panRef: Ref[any] = Ref(),
         fittedRef: Ref[any] = Ref(),
         dragRef: Ref[any] = Ref(),
-        # Position writes run in order; a new drag invalidates older reads.
-        moveVersionRef: Ref[any] = Ref(),
-        moveQueueRef: Ref[any] = Ref(),
+        # Writes are shared across mounts; these refs only guard this view.
         moveSavingRef: Ref[any] = Ref(),
-        movePendingRef: Ref[any] = Ref(),
+        moveMountedRef: Ref[any] = Ref(),
+        moveRefreshRef: Ref[any] = Ref(),
         wireRef: Ref[any] = Ref(),
         gestureRef: Ref[any] = Ref(),
         activePointerRef: Ref[any] = Ref(),
@@ -245,6 +252,20 @@ def:pub FlowLinePage -> JsxPage {
             fitZoom();
         },
         [len(steps), editing, lineView, boxW, boxH, narrow, phoneView, loading]
+    );
+
+    # A previous flow page may still be saving when this one mounts.
+    useEffect(
+        lambda {
+            moveMountedRef.current = True;
+            onSaved: any = lambda { saveMoves(); };
+            window.addEventListener("flowline:moves-saved", onSaved);
+            return lambda {
+                moveMountedRef.current = False;
+                window.removeEventListener("flowline:moves-saved", onSaved);
+            };
+        },
+        []
     );
 
     # A resize refits through measureBox. Late web fonts widen the measured
@@ -398,6 +419,9 @@ def:pub FlowLinePage -> JsxPage {
     async def saveMoves -> None;
 
     peekRef.current = peekId;
+    if moveMountedRef.current is None {
+        moveMountedRef.current = True;
+    }
     stepsRef.current = steps;
     liveRef.current = live;
     if zoomRef.current is None {

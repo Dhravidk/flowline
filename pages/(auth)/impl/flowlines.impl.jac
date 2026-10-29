@@ -45,21 +45,44 @@ impl FlowLinePage.loadShared -> None {
 }
 
 impl FlowLinePage.reload(pid: str, moveVersion: int = -1) -> bool {
+    version = flowMoveVersion() if moveVersion < 0 else moveVersion;
+    moveRefreshRef.current = True;
     loaded = False;
     try {
         result = root spawn GetFlowLine(project_id=pid);
         fresh: list[StepView] = result.reports[0] if result.reports else [];
-        if moveVersion >= 0
-            and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
+        if not moveMountedRef.current or pid != projectId {
+            return False;
+        }
+        if version != flowMoveVersion() {
+            moveRefreshRef.current = True;
+            saveMoves();
             return False;
         }
         steps = fresh;
         loadTitles(fresh);
+        # Every current read can confirm completed writes, including an
+        # ordinary rename or project refresh after a failed save refresh.
+        if not dragRef.current and not flowMovesBusy() {
+            acknowledgeFlowMoves(version);
+            moveRefreshRef.current = False;
+        }
+        positions = pendingFlowMoves();
+        drag: any = dragRef.current;
+        if drag and drag["moved"] {
+            positions[drag["id"]] = [float(drag["lx"]), float(drag["ly"])];
+        }
+        liveRef.current = positions;
+        live = positions;
         failed = False;
         loaded = True;
     } except Exception as e {
-        if moveVersion >= 0
-            and (moveVersion != int(moveVersionRef.current or 0) or pid != projectId) {
+        if not moveMountedRef.current or pid != projectId {
+            return False;
+        }
+        if version != flowMoveVersion() {
+            moveRefreshRef.current = True;
+            saveMoves();
             return False;
         }
         # With a line on screen a toast is enough; with nothing, the page
@@ -1631,9 +1654,7 @@ impl FlowLinePage.moveDrag(e: any) -> None {
             return;
         }
         drag["moved"] = True;
-        version = int(moveVersionRef.current or 0) + 1;
-        moveVersionRef.current = version;
-        drag["version"] = version;
+        advanceFlowMove();
         dragId = drag["id"];
         try {
             surface.setPointerCapture(e.pointerId);
@@ -1656,7 +1677,7 @@ impl FlowLinePage.discardDrag -> None {
     dragId = "";
     # Drop only the current preview. Earlier drops may still be queued,
     # in flight, or waiting for a fresh server read.
-    pending = (movePendingRef.current or {}) as dict[str, list[float]];
+    pending = pendingFlowMoves();
     liveRef.current = pending;
     live = pending;
 }
@@ -1740,59 +1761,33 @@ impl FlowLinePage.finishPointer(e: any, canceled: bool) -> None {
         await saveMoves();
         return;
     }
-    pending = {** (movePendingRef.current or {})};
-    pending[drag["id"]] = [float(drag["lx"]), float(drag["ly"])];
-    movePendingRef.current = pending;
+    queueFlowMove(str(drag["id"]), float(drag["lx"]), float(drag["ly"]));
     discardDrag();
     swallowRef.current = new(Date).getTime();
-    queued = (moveQueueRef.current or []) as list[dict[str, any]];
-    move = drag as dict[str, any];
-    moveQueueRef.current = queued + [move];
     await saveMoves();
 }
 
 impl FlowLinePage.saveMoves -> None {
-    if moveSavingRef.current {
+    if not moveMountedRef.current or moveSavingRef.current {
         return;
     }
     moveSavingRef.current = True;
     try {
-        while True {
-            queued = (moveQueueRef.current or []) as list[dict[str, any]];
-            if len(queued) == 0 {
-                if dragRef.current or not movePendingRef.current {
-                    break;
-                }
-                version = int(moveVersionRef.current or 0);
-                pid = projectId;
-                loaded = await reload(pid, version);
-                if version == int(moveVersionRef.current or 0)
-                    and not dragRef.current
-                    and pid == projectId {
-                    if loaded {
-                        movePendingRef.current = {};
-                        liveRef.current = {};
-                        live = {};
-                    }
-                    break;
-                }
-                if dragRef.current or pid != projectId {
-                    break;
-                }
-                # Another drop or a canceled preview invalidated the read;
-                # drain any new writes and refresh the latest version.
-                continue;
+        await flushFlowMoves();
+        while moveMountedRef.current {
+            if dragRef.current {
+                break;
             }
-            move = queued[0];
-            moveQueueRef.current = queued[1:];
-            try {
-                root spawn MoveStep(
-                    step_id=str(move["id"]), x=float(move["lx"]), y=float(move["ly"])
-                );
-                forgetWorkspace();
-            } except Exception as err {
-                toast.error("Failed to save the position");
+            if not moveRefreshRef.current and len(pendingFlowMoves()) == 0 {
+                break;
             }
+            version = flowMoveVersion();
+            pid = projectId;
+            await reload(pid, version);
+            if version == flowMoveVersion() or pid != projectId or dragRef.current {
+                break;
+            }
+            await flushFlowMoves();
         }
     } finally {
         moveSavingRef.current = False;
