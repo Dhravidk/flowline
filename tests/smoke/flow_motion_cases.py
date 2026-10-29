@@ -8,6 +8,21 @@ from playwright.sync_api import expect
 from browser_gate import BASE, step
 
 
+def center(box):
+    return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+
+def touch_gesture(cdp, points, targets):
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": points})
+    for n in range(1, 9):
+        moved = [
+            {**a, "x": a["x"] + (b["x"] - a["x"]) * n / 8,
+             "y": a["y"] + (b["y"] - a["y"]) * n / 8}
+            for a, b in zip(points, targets)
+        ]
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": moved})
+
+
 class FlowMotionChecks:
     def __init__(self, page, call):
         self.page = page
@@ -62,6 +77,78 @@ class FlowMotionChecks:
         assert saved.value.ok, saved.value.text()
         saved.value.json()
         return saved.value.request.post_data_json
+
+    def expect_center(self, row, expected):
+        self.wait_for(
+            lambda: all(math.isclose(a, b, abs_tol=1) for a, b in zip(center(self.node(row).bounding_box()), expected)),
+            f"Step did not settle at screen position {expected}",
+        )
+
+    def refresh_position(self, row, x, y, title):
+        """A real UI refresh must stop displaying any completed drag override."""
+        before = center(self.node(row).bounding_box())
+        old_x, old_y = self.positions()[row["id"]]
+        self.report("MoveStep", {"step_id": row["id"], "x": x, "y": y})
+        field = self.page.get_by_role("textbox", name="Step name", exact=True)
+        field.fill(title)
+        with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as refreshed:
+            field.press("Enter")
+        assert refreshed.value.ok, refreshed.value.text()
+        expect(self.node(row)).to_contain_text(title)
+        self.expect_center(row, (before[0] + x - old_x, before[1] + y - old_y))
+
+    def clicks_refresh(self):
+        step("motion: clicks and sub-threshold motion do not mask fresh server positions")
+        for dx, dy in ((0, 0), (2, 1)):
+            row, = self.fresh([("Click", 0, 0)])
+            writes = []
+
+            def requested(request):
+                if request.url.endswith("/walker/MoveStep"):
+                    writes.append(request.post_data_json)
+
+            self.page.on("request", requested)
+            try:
+                self.held_drag(row, dx, dy)
+                self.page.mouse.up()
+                expect(self.page.get_by_role("textbox", name="Step name", exact=True)).to_have_value("Click")
+                self.refresh_position(row, 150, 0, "Fresh")
+                assert not writes, ("A click must not save a position", writes)
+            finally:
+                self.page.remove_listener("request", requested)
+
+    def click_during_save(self):
+        step("motion: a save finishing during a click still reconciles after release")
+        row, = self.fresh([("Pending click", 0, 0)])
+        held = []
+
+        def hold_write(route):
+            held.append(route)
+
+        self.page.route("**/walker/MoveStep", hold_write)
+        try:
+            self.held_drag(row, 40, 0)
+            self.page.mouse.up()
+            self.wait_for(lambda: bool(held), "The position write did not start")
+            # The new press keeps dragRef occupied while the prior save completes.
+            self.held_drag(row, 0, 0)
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/MoveStep")) as saved:
+                held.pop(0).continue_()
+            assert saved.value.ok, saved.value.text()
+            self.page.unroute("**/walker/MoveStep", hold_write)
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as refreshed:
+                self.page.mouse.up()
+            assert refreshed.value.ok, refreshed.value.text()
+            self.wait_for(lambda: self.positions()[row["id"]] == (40, 0), "The pending drop did not save")
+            # Wait out the earlier drop's click suppression before opening its form.
+            self.page.wait_for_timeout(550)
+            self.node(row).click()
+            self.refresh_position(row, 150, 0, "Reconciled")
+        finally:
+            self.page.unroute("**/walker/MoveStep", hold_write)
+            for route in held:
+                route.continue_()
+            self.page.mouse.up()
 
     def overlap(self):
         step("motion: overlapping steps drag the visible front step")
@@ -322,19 +409,9 @@ class FlowMotionChecks:
             checks.node(row).scroll_into_view_if_needed()
             cdp = context.new_cdp_session(mobile)
 
-            def gesture(points, targets):
-                cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": points})
-                for n in range(1, 9):
-                    moved = [
-                        {**a, "x": a["x"] + (b["x"] - a["x"]) * n / 8,
-                         "y": a["y"] + (b["y"] - a["y"]) * n / 8}
-                        for a, b in zip(points, targets)
-                    ]
-                    cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": moved})
-
             box = checks.node(row).bounding_box()
             x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
-            gesture([{"id": 1, "x": x, "y": y}], [{"x": x - 60, "y": y - 30}])
+            touch_gesture(cdp, [{"id": 1, "x": x, "y": y}], [{"x": x - 60, "y": y - 30}])
             with mobile.expect_response(lambda r: r.url.endswith("/walker/MoveStep")) as saved:
                 cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
             assert saved.value.ok, saved.value.text()
@@ -344,7 +421,7 @@ class FlowMotionChecks:
             frame = mobile.locator('[data-canvas="flow"]').bounding_box()
             before = checks.node(row).bounding_box()
             x, y = frame["x"] + 25, max(frame["y"] + 25, 40)
-            gesture([{"id": 2, "x": x, "y": y}], [{"x": x + 40, "y": y + 30}])
+            touch_gesture(cdp, [{"id": 2, "x": x, "y": y}], [{"x": x + 40, "y": y + 30}])
             cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
             after = checks.node(row).bounding_box()
             assert math.isclose(after["x"] - before["x"], 40, abs_tol=1), (before, after)
@@ -352,7 +429,8 @@ class FlowMotionChecks:
 
             x, y = after["x"] + after["width"] / 2, after["y"] + after["height"] / 2
             before_zoom = float(mobile.locator("[data-zoom]").get_attribute("data-zoom").rstrip("%"))
-            gesture(
+            touch_gesture(
+                cdp,
                 [{"id": 3, "x": x - 35, "y": y}, {"id": 4, "x": x + 35, "y": y}],
                 [{"x": x - 50, "y": y}, {"x": x + 50, "y": y}],
             )
@@ -368,12 +446,174 @@ class FlowMotionChecks:
         finally:
             context.close()
 
+    def touch_lifecycle(self):
+        step("motion: canceled touch drags roll back without saving, then allow a new drag")
+        context = self.page.context.browser.new_context(
+            viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True,
+            storage_state=self.page.context.storage_state(),
+        )
+        mobile = context.new_page()
+        mobile.set_default_timeout(20000)
+        errors = []
+        mobile.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            checks = FlowMotionChecks(mobile, self.call)
+            mobile.goto(BASE + "/flowlines?start=blank")
+            cdp = context.new_cdp_session(mobile)
+            row, = checks.fresh([("Canceled", 0, 0)])
+            checks.node(row).scroll_into_view_if_needed()
+            before = center(checks.node(row).bounding_box())
+            x, y = before
+            writes = []
+
+            def requested(request):
+                if request.url.endswith("/walker/MoveStep"):
+                    writes.append(request.post_data_json)
+
+            mobile.on("request", requested)
+            touch_gesture(cdp, [{"id": 1, "x": x, "y": y}], [{"x": x - 50, "y": y - 25}])
+            checks.expect_center(row, (x - 50, y - 25))
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchCancel", "touchPoints": []})
+            checks.expect_center(row, before)
+            assert checks.positions()[row["id"]] == (0, 0)
+            assert not writes, ("Canceled drag wrote a position", writes)
+            mobile.remove_listener("request", requested)
+            touch_gesture(cdp, [{"id": 2, "x": x, "y": y}], [{"x": x + 40, "y": y}])
+            with mobile.expect_response(lambda r: r.url.endswith("/walker/MoveStep")) as saved:
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            assert saved.value.ok, saved.value.text()
+            assert math.isclose(checks.positions()[row["id"]][0], 40, abs_tol=1)
+
+            # A pending drop survives either kind of interruption, while a
+            # failed pending write still restores the server's prior position.
+            for interruption in ("cancel", "pinch"):
+                for fail in (False, True):
+                    step(f"motion: {interruption} preserves a pending {'failed' if fail else 'successful'} drop")
+                    row, = checks.fresh([("Pending", 0, 0)])
+                    checks.node(row).scroll_into_view_if_needed()
+                    origin = center(checks.node(row).bounding_box())
+                    x, y = origin
+                    held = []
+                    writes = []
+
+                    def hold_write(route):
+                        writes.append(route.request.post_data_json)
+                        held.append(route)
+
+                    mobile.route("**/walker/MoveStep", hold_write)
+                    try:
+                        touch_gesture(cdp, [{"id": 3, "x": x, "y": y}], [{"x": x + 40, "y": y}])
+                        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+                        checks.wait_for(lambda: bool(held), "The pending touch write did not start")
+                        pending = center(checks.node(row).bounding_box())
+                        assert math.isclose(pending[0] - origin[0], 40, abs_tol=1), (origin, pending)
+                        x, y = pending
+                        # Start another preview and interrupt it. Only that
+                        # preview should disappear; the first drop stays put.
+                        touch_gesture(cdp, [{"id": 4, "x": x, "y": y}], [{"x": x + 20, "y": y}])
+                        checks.expect_center(row, (x + 20, y))
+                        if interruption == "cancel":
+                            cdp.send("Input.dispatchTouchEvent", {"type": "touchCancel", "touchPoints": []})
+                        else:
+                            zoom = mobile.locator("[data-zoom]").get_attribute("data-zoom")
+                            cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [
+                                {"id": 4, "x": x + 20, "y": y}, {"id": 5, "x": x - 40, "y": y},
+                            ]})
+                            assert mobile.locator("[data-zoom]").get_attribute("data-zoom") == zoom
+                        checks.expect_center(row, pending)
+                        if interruption == "pinch":
+                            cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+                        with mobile.expect_response(lambda r: r.url.endswith("/walker/MoveStep")) as saved:
+                            route = held.pop(0)
+                            if fail:
+                                route.fulfill(status=500, content_type="application/json", body='{"detail":"Motion gate failure"}')
+                            else:
+                                route.continue_()
+                        assert saved.value.status == (500 if fail else 200), saved.value.text()
+                        target = origin if fail else pending
+                        checks.expect_center(row, target)
+                        checks.wait_for(
+                            lambda: math.isclose(checks.positions()[row["id"]][0], 0 if fail else 40, abs_tol=1),
+                            "Interrupted gesture did not settle at the saved position",
+                        )
+                        assert len(writes) == 1, ("The interrupted preview must not save", writes)
+                    finally:
+                        while held:
+                            held.pop(0).continue_()
+                        mobile.unroute("**/walker/MoveStep", hold_write)
+            step("motion: canceling a touch wire creates no transition and allows the next wire")
+            source, target = checks.fresh([("Source", 0, 0), ("Target", 400, 0)])
+            checks.node(source).scroll_into_view_if_needed()
+            links = []
+
+            def linking(request):
+                if request.url.endswith("/walker/LinkTransition"):
+                    links.append(request.post_data_json)
+
+            def wire():
+                box = checks.node(source).bounding_box()
+                tx, ty = center(checks.node(target).bounding_box())
+                touch_gesture(cdp, [{"id": 6, "x": box["x"] + box["width"] - 2, "y": box["y"] + box["height"] / 2}],
+                              [{"x": tx, "y": ty}])
+
+            mobile.on("request", linking)
+            wire()
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchCancel", "touchPoints": []})
+            expect(mobile.locator("[data-wire]")).to_have_count(0)
+            assert not links, links
+            wire()
+            with mobile.expect_response(lambda r: r.url.endswith("/walker/LinkTransition")) as linked:
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            assert linked.value.ok, linked.value.text()
+            expect(mobile.locator("[data-wire]")).to_have_count(1)
+            assert len(links) == 1, links
+            mobile.remove_listener("request", linking)
+            mobile.screenshot(path=".jac/flow-gesture-mobile.png", full_page=True)
+            assert not errors, errors
+        except Exception:
+            mobile.screenshot(path=".jac/flow-gesture-mobile-failure.png", full_page=True)
+            raise
+        finally:
+            context.close()
+
+    def hybrid_input(self):
+        step("motion: mouse hover followed by one touch drags a box without pinching")
+        context = self.page.context.browser.new_context(
+            viewport={"width": 1440, "height": 1000}, has_touch=True,
+            storage_state=self.page.context.storage_state(),
+        )
+        hybrid = context.new_page()
+        hybrid.set_default_timeout(20000)
+        errors = []
+        hybrid.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            checks = FlowMotionChecks(hybrid, self.call)
+            hybrid.goto(BASE + "/flowlines?start=blank")
+            row, = checks.fresh([("Hybrid", 0, 0)])
+            x, y = center(checks.node(row).bounding_box())
+            hybrid.mouse.move(x, y)
+            zoom = hybrid.locator("[data-zoom]").get_attribute("data-zoom")
+            cdp = context.new_cdp_session(hybrid)
+            touch_gesture(cdp, [{"id": 1, "x": x, "y": y}], [{"x": x + 60, "y": y}])
+            with hybrid.expect_response(lambda r: r.url.endswith("/walker/MoveStep")) as saved:
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            assert saved.value.ok, saved.value.text()
+            stored = checks.positions()[row["id"]]
+            assert math.isclose(stored[0], 60, abs_tol=1) and math.isclose(stored[1], 0, abs_tol=1), stored
+            assert hybrid.locator("[data-zoom]").get_attribute("data-zoom") == zoom
+            checks.expect_center(row, (x + 60, y))
+            hybrid.screenshot(path=".jac/flow-gesture-hybrid.png", full_page=True)
+            assert not errors, errors
+        finally:
+            context.close()
+
 
 def run_motion_checks(page, call):
     checks = FlowMotionChecks(page, call)
     for check in (
+        checks.clicks_refresh, checks.click_during_save,
         checks.overlap, checks.stale_refresh, checks.delayed_write, checks.failed_write,
         checks.large_fit, checks.negative_labels, checks.boundaries,
-        checks.pan_and_zoom, checks.lanes, checks.touch,
+        checks.pan_and_zoom, checks.lanes, checks.touch, checks.touch_lifecycle, checks.hybrid_input,
     ):
         check()
