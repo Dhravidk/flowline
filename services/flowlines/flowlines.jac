@@ -483,7 +483,9 @@ walker:protect SaveStep {
         # Empty means "keep", like every field here; a space clears it.
         owner: str = "",
         blurb: str = "",
+        # Signed canvas X on create; clamped to the shared coordinate bound.
         x: float = 0.0,
+        # Signed canvas Y on create; ignored on update, like X.
         y: float = 0.0,
         reports: list[StepView] = [];
 
@@ -557,8 +559,10 @@ walker:protect SaveStep {
 
 
 walker:protect MoveStep(find_step) {
-    """Persist the designer position after a drag, fired on mouse-up."""
+    """Store a step's signed canvas position within the shared coordinate bound."""
+    # Signed canvas X; finite overflow stops at the nearest boundary.
     has x: float = 0.0,
+        # Signed canvas Y; non-finite X or Y becomes 0.
         y: float = 0.0,
         reports: list[StepView] = [];
 
