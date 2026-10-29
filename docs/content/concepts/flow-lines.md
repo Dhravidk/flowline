@@ -256,6 +256,8 @@ A click or a canceled drag does not save a position. A second finger switches
 the current gesture to a pinch and abandons only its unfinished drag. Earlier
 drops stay visible while their saves finish. A failed position write shows an
 error, and a successful refresh restores the server's stored position.
+Queued drops keep their order when navigating between app pages; reopening
+the flow includes positions whose saves are still pending.
 
 ## Editing rules
 

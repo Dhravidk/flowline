@@ -1,6 +1,7 @@
 """Interaction regressions exercised by flow_canvas_gate.py's fresh account."""
 import json
 import math
+import re
 import time
 
 from playwright.sync_api import expect
@@ -167,6 +168,210 @@ class FlowMotionChecks:
         positions = self.positions()
         assert positions[front["id"]] == (315, 0), positions
         assert positions[back["id"]] == (240, 0), positions
+
+    def navigation_queue(self):
+        step("motion: queued drops keep their order across flow page remounts")
+        for fail_first in (False, True):
+            row, = self.fresh([("Navigation queue", 0, 0)])
+            held = []
+            writes = []
+            responses = []
+            first = [True]
+
+            def hold_first(route):
+                if first[0]:
+                    first[0] = False
+                    held.append((route, None if fail_first else route.fetch()))
+                else:
+                    route.continue_()
+
+            def requested(request):
+                if request.url.endswith("/walker/MoveStep"):
+                    writes.append(request.post_data_json)
+
+            def responded(response):
+                if response.url.endswith("/walker/MoveStep"):
+                    responses.append(response)
+
+            self.page.route("**/walker/MoveStep", hold_first)
+            self.page.on("request", requested)
+            self.page.on("response", responded)
+            try:
+                self.held_drag(row, 80, 0)
+                self.page.mouse.up()
+                self.wait_for(lambda: bool(held), "The first save response was not held")
+                self.held_drag(row, 80, 0)
+                self.page.mouse.up()
+                self.page.get_by_role("link", name="Board", exact=True).click()
+                expect(self.page).to_have_url(re.compile(r"/board(?:\?.*)?$"))
+                self.page.get_by_role("link", name="Flow line", exact=True).click()
+                self.page.get_by_role("button", name="Edit flow line", exact=True).click()
+                # The remounted canvas includes the pending drop at X=160.
+                self.held_drag(row, 40, 0)
+                self.page.mouse.up()
+                self.page.wait_for_timeout(150)
+                assert len(writes) == 1, ("A remount started a second writer", writes)
+                route, response = held.pop(0)
+                if fail_first:
+                    route.fulfill(status=500, content_type="application/json", body='{"detail":"Motion gate failure"}')
+                else:
+                    route.fulfill(response=response)
+                self.wait_for(lambda: len(responses) == 3, "The shared queue did not finish every drop")
+                assert [r.status for r in responses] == [500 if fail_first else 200, 200, 200]
+                assert [r["x"] for r in writes] == [80, 160, 200], writes
+                self.wait_for(lambda: self.positions()[row["id"]] == (200, 0), "An old page overwrote the latest drop")
+                self.page.reload()
+                expect(self.node(row)).to_be_visible()
+                assert self.positions()[row["id"]] == (200, 0)
+            finally:
+                for route, response in held:
+                    if response is None:
+                        route.abort()
+                    else:
+                        route.fulfill(response=response)
+                self.page.unroute("**/walker/MoveStep", hold_first)
+                self.page.remove_listener("request", requested)
+                self.page.remove_listener("response", responded)
+
+    def refresh_recovery(self):
+        step("motion: a successful ordinary refresh clears overrides after a failed save refresh")
+        row, = self.fresh([("Refresh failure", 0, 0)])
+        self.node(row).click()
+
+        def reject(route):
+            route.fulfill(status=500, content_type="application/json", body='{"detail":"Motion gate read failure"}')
+
+        self.page.route("**/walker/GetFlowLine", reject)
+        try:
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as refreshed:
+                self.drop(row, 40, 0)
+            assert refreshed.value.status == 500
+            expect(self.page.get_by_text("Failed to load your flow line", exact=True)).to_be_visible()
+        finally:
+            self.page.unroute("**/walker/GetFlowLine", reject)
+        self.refresh_position(row, 150, 0, "Recovered fresh")
+
+    def project_refresh(self):
+        step("motion: switching projects during a save refresh cannot leave a stale position")
+        self.report("SaveProject", {"name": "Motion project B"})
+        row, = self.fresh([("Scoped step", 0, 0)])
+        self.node(row).click()
+        held = []
+        first = [True]
+
+        def hold_first(route):
+            if first[0]:
+                first[0] = False
+                held.append((route, route.fetch()))
+            else:
+                route.continue_()
+
+        self.page.route("**/walker/GetFlowLine", hold_first)
+        try:
+            self.drop(row, 40, 0)
+            self.wait_for(lambda: bool(held), "The first save refresh did not start")
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as switched:
+                self.page.get_by_role("button", name=re.compile(r"^Motion project B\s+0$")).click()
+            assert switched.value.ok, switched.value.text()
+            route, response = held.pop(0)
+            route.fulfill(response=response)
+            self.page.unroute("**/walker/GetFlowLine", hold_first)
+            self.page.wait_for_timeout(150)
+            self.refresh_position(row, 150, 0, "Scoped fresh")
+        finally:
+            for route, response in held:
+                route.fulfill(response=response)
+            self.page.unroute("**/walker/GetFlowLine", hold_first)
+
+    def ordinary_stale_refresh(self):
+        step("motion: a delayed metadata refresh cannot undo a completed drop")
+        row, = self.fresh([("Old metadata", 0, 0)])
+        self.node(row).click()
+        before = center(self.node(row).bounding_box())
+        held = []
+        first = [True]
+
+        def hold_first(route):
+            if first[0]:
+                first[0] = False
+                held.append((route, route.fetch()))
+            else:
+                route.continue_()
+
+        self.page.route("**/walker/GetFlowLine", hold_first)
+        try:
+            field = self.page.get_by_role("textbox", name="Step name", exact=True)
+            field.fill("Fresh metadata")
+            field.press("Enter")
+            self.wait_for(lambda: bool(held), "The metadata refresh did not start")
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as current:
+                self.drop(row, 80, 0)
+            assert current.value.ok, current.value.text()
+            self.page.wait_for_timeout(100)
+            route, response = held.pop(0)
+            route.fulfill(response=response)
+            self.page.wait_for_timeout(250)
+            self.expect_center(row, (before[0] + 80, before[1]))
+            expect(self.node(row)).to_contain_text("Fresh metadata")
+            assert self.positions()[row["id"]] == (80, 0)
+        finally:
+            for route, response in held:
+                route.fulfill(response=response)
+            self.page.unroute("**/walker/GetFlowLine", hold_first)
+
+    def pending_metadata_refresh(self):
+        step("motion: a read started during queued writes cannot confirm their old positions")
+        row, = self.fresh([("Pending metadata", 0, 0)])
+        self.node(row).click()
+        held_writes = []
+        held_reads = []
+        first_write = [True]
+        first_read = [True]
+
+        def hold_write(route):
+            if first_write[0]:
+                first_write[0] = False
+                held_writes.append((route, route.fetch()))
+            else:
+                route.continue_()
+
+        def hold_read(route):
+            if first_read[0]:
+                first_read[0] = False
+                held_reads.append((route, route.fetch()))
+            else:
+                route.continue_()
+
+        self.page.route("**/walker/MoveStep", hold_write)
+        self.page.route("**/walker/GetFlowLine", hold_read)
+        try:
+            self.held_drag(row, 80, 0)
+            self.page.mouse.up()
+            self.wait_for(lambda: bool(held_writes), "The first save did not start")
+            self.held_drag(row, 80, 0)
+            self.page.mouse.up()
+            field = self.page.get_by_role("textbox", name="Step name", exact=True)
+            field.fill("Queued metadata")
+            field.press("Enter")
+            self.wait_for(lambda: bool(held_reads), "The metadata read did not start during the pending save")
+            with self.page.expect_response(lambda r: r.url.endswith("/walker/GetFlowLine")) as current:
+                route, response = held_writes.pop(0)
+                route.fulfill(response=response)
+            assert current.value.ok, current.value.text()
+            self.page.wait_for_timeout(100)
+            before = center(self.node(row).bounding_box())
+            route, response = held_reads.pop(0)
+            route.fulfill(response=response)
+            self.page.wait_for_timeout(250)
+            after = center(self.node(row).bounding_box())
+            assert all(math.isclose(a, b, abs_tol=1) for a, b in zip(before, after)), (before, after)
+            expect(self.node(row)).to_contain_text("Queued metadata")
+            assert self.positions()[row["id"]] == (160, 0)
+        finally:
+            for route, response in held_writes + held_reads:
+                route.fulfill(response=response)
+            self.page.unroute("**/walker/MoveStep", hold_write)
+            self.page.unroute("**/walker/GetFlowLine", hold_read)
 
     def stale_refresh(self):
         step("motion: a delayed refresh cannot interrupt an active drag")
@@ -612,6 +817,9 @@ def run_motion_checks(page, call):
     checks = FlowMotionChecks(page, call)
     for check in (
         checks.clicks_refresh, checks.click_during_save,
+        checks.navigation_queue, checks.refresh_recovery, checks.project_refresh,
+        checks.ordinary_stale_refresh,
+        checks.pending_metadata_refresh,
         checks.overlap, checks.stale_refresh, checks.delayed_write, checks.failed_write,
         checks.large_fit, checks.negative_labels, checks.boundaries,
         checks.pan_and_zoom, checks.lanes, checks.touch, checks.touch_lifecycle, checks.hybrid_input,

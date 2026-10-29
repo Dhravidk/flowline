@@ -67,7 +67,8 @@ and `dev`.
        saved positions after reload. Its `flow_motion_cases.py` regressions
        cover overlapping steps, clicks, delayed and failed saves, canceled
        drags and wires, coordinate boundaries, negative-position labels,
-       panning, zoom, lane switches, and phone and mixed mouse/touch input.
+       panning, zoom, lane switches, navigation with queued drops, recovery
+       after failed or invalidated reads, and phone and mixed mouse/touch input.
 
 === "docs: build"
 
@@ -93,6 +94,12 @@ Desktop coverage uses 1440 × 1000; phone emulation uses 390 × 844 with Chromiu
 touch events. These checks do not replace testing on physical touch devices.
 Screenshots are written under `.jac/`; the top-level
 `browser_gate_failure.png` captures a failed run.
+
+Position writes live in `lib/flowMoves.jac` so app navigation cannot start a
+second writer. A flow page owns its active drag preview; a current server
+read confirms pending positions only after all writes settle and no drag is
+active. The gate holds responses while navigating and switching projects to
+exercise those boundaries.
 
 For the Jac Builder preview path, run the same gate against the hot-reload
 server, with one worker as required by Jac's development mode:
